@@ -239,7 +239,7 @@ class FactStoreAgent:
 
     def parse_and_execute(self, response: str) -> bool:
         # Print Thought Process for debugging
-        think_match = re.search(r"<think>(.*?)</think>", response, re.DOTALL)
+        # think_match = re.search(r"<think>(.*?)</think>", response, re.DOTALL)
         # if think_match:
         #     print(f"\n[Thought Process]:\n{think_match.group(1).strip()}\n")
         
@@ -320,7 +320,29 @@ class FactStoreAgent:
                 fact_key = f"{parts[0]}, {parts[1]}, {parts[2]}"
                 print(f"   [Action] Retrieve: {fact_key}")
                 
-                source_text = self.evidence_db.get(fact_key, "No record found.")
+                source_text = self.evidence_db.get(fact_key)
+                
+                # If exact match is not found, find the most similar key
+                if source_text is None:
+                    print(f"        -\u003e Exact fact not in Evidence DB. Finding most similar fact...")
+                    if self.evidence_db:
+                        # Encode the query fact
+                        query_emb = self.engine.encode_texts([fact_key], is_query=True)
+                        
+                        # Encode all keys in the evidence_db
+                        db_keys = list(self.evidence_db.keys())
+                        db_keys_embs = self.engine.encode_texts(db_keys, is_query=False) # Treat keys as passages for comparison
+                        
+                        # Compute similarity
+                        scores = (query_emb @ db_keys_embs.T)[0]
+                        best_match_idx = np.argmax(scores)
+                        best_match_key = db_keys[best_match_idx]
+                        best_match_score = scores[best_match_idx]
+                        
+                        print(f"        -\u003e Best match (Score: {best_match_score:.4f}): {best_match_key}")
+                        source_text = self.evidence_db[best_match_key]
+                    else:
+                        source_text = "No record found in an empty Evidence DB."
                 self.current_observation_str = f"Fact: <{fact_key}>\nSource:\n{source_text}"
                 self.history_summary.append(f"- Retrieve: {fact_key}")
                 print(f"\n{'='*20} Retrieved Evidence {'='*20}\n{source_text}\n{'='*62}\n")
@@ -344,6 +366,12 @@ class FactStoreAgent:
         for step in range(max_steps):
             print(f"--- Step {step + 1} ---")
             messages = self.build_context(query)
+            # debug 输出input
+            print("\n[Model Input Messages]")
+            for m in messages:
+                content_preview = m['content']
+                print(f"[{m['role'].upper()}]:\n{content_preview}")
+                print("-" * 40)
             response = self.engine.generate(messages)
             print(f"[LLM Output]: {response}")
             keep_going = self.parse_and_execute(response)

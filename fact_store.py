@@ -200,7 +200,8 @@ class FactStoreAgent:
             "1. **Reasoning First**: You must conduct reasoning inside <think>...</think> before generating any action.\n"
             "2. **No Hallucination**: You cannot answer from your internal training memory. You must <search>, read the observation, and <assert> facts.\n"
             "3. **Fact-Dependency**: Your final <answer> must be strictly derived from the **Current Fact-Store**.\n\n"
-            
+            "4. **Format requirement**: You must enclose your action selection within <>.\n"
+
             "**AVAILABLE ACTIONS** (Output only one action type after your <think> block):\n"
             "- **Acquire Info**: <search>keywords</search>\n"
             "  (Use this when Fact-Store lacks information. System will return an Observation.)\n\n"
@@ -213,6 +214,12 @@ class FactStoreAgent:
             
             "- **Final Answer**: <answer>Detailed Answer</answer>\n"
             "  (Use this only when the Fact-Store contains sufficient evidence.)\n\n"
+        
+                        "**ACTION FORMAT EXAMPLES**\n"
+            "<think>I need to find out the director of the movie 'Inception'.</think>\n"
+            "<search>director of Inception</search>\n\n"
+            "<think>The observation says 'Christopher Nolan directed Inception'. I should store this fact.</think>\n"
+            "<assert>Inception, directed by, Christopher Nolan</assert>\n\n"
             
             f"=== Current Fact-Store ===\n{facts_str}\n\n"
         )
@@ -324,7 +331,7 @@ class FactStoreAgent:
                 
                 # If exact match is not found, find the most similar key
                 if source_text is None:
-                    print(f"        -\u003e Exact fact not in Evidence DB. Finding most similar fact...")
+                    print(f"        -> Exact fact not in Evidence DB. Finding most similar fact...")
                     if self.evidence_db:
                         # Encode the query fact
                         query_emb = self.engine.encode_texts([fact_key], is_query=True)
@@ -339,7 +346,7 @@ class FactStoreAgent:
                         best_match_key = db_keys[best_match_idx]
                         best_match_score = scores[best_match_idx]
                         
-                        print(f"        -\u003e Best match (Score: {best_match_score:.4f}): {best_match_key}")
+                        print(f"        -> Best match (Score: {best_match_score:.4f}): {best_match_key}")
                         source_text = self.evidence_db[best_match_key]
                     else:
                         source_text = "No record found in an empty Evidence DB."
@@ -367,11 +374,11 @@ class FactStoreAgent:
             print(f"--- Step {step + 1} ---")
             messages = self.build_context(query)
             # debug 输出input
-            print("\n[Model Input Messages]")
-            for m in messages:
-                content_preview = m['content']
-                print(f"[{m['role'].upper()}]:\n{content_preview}")
-                print("-" * 40)
+            # print("\n[Model Input Messages]")
+            # for m in messages:
+            #     content_preview = m['content']
+            #     print(f"[{m['role'].upper()}]:\n{content_preview}")
+            #     print("-" * 40)
             response = self.engine.generate(messages)
             print(f"[LLM Output]: {response}")
             keep_going = self.parse_and_execute(response)
@@ -386,9 +393,9 @@ def load_hotpot_sample(index=0):
     Load a single sample from HotpotQA validation set and format it for the agent.
     """
     print(">>> Loading HotpotQA Dataset (distractor/validation)...")
-    dataset = load_dataset("hotpot_qa", "distractor", split="validation", trust_remote_code=True)
+    dataset = load_dataset("hotpot_qa", "fullwiki", split="test", trust_remote_code=True)
+    print(len(dataset))
     data = dataset[index]
-    
     question = data["question"]
     
     # 1. Build Corpus from Context

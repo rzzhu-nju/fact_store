@@ -185,6 +185,7 @@ class FactStoreAgent:
         self.history_summary = [] 
         self.current_observation_str = None 
         self.searched_queries = set()
+        self.search_history = []
         self.covered_gold_indices = set() 
 
     def get_system_prompt(self) -> str:
@@ -201,6 +202,7 @@ class FactStoreAgent:
             "2. **No Hallucination**: You cannot answer from your internal training memory. You must <search>, read the observation, and <assert> facts.\n"
             "3. **Fact-Dependency**: Your final <answer> must be strictly derived from the **Current Fact-Store**.\n\n"
             "4. **Format requirement**: You must enclose your action selection within <>.\n"
+            "5. **Avoid Duplicate Searches**: Review the Search History block. Do not repeat executed queries; craft new searches that are clearly distinct.\n"
 
             "**AVAILABLE ACTIONS** (Output only one action type after your <think> block):\n"
             "- **Acquire Info**: <search>keywords</search>\n"
@@ -231,6 +233,14 @@ class FactStoreAgent:
         if self.history_summary:
             messages.append({"role": "user", "content": "History:\n" + "\n".join(self.history_summary)})
         
+        if self.search_history:
+            hist = "\n".join([f"- {q}" for q in self.search_history])
+            sh_block = (
+                f"=== Executed Searches ===\n{hist}\n\n"
+                f"Instruction: Do not repeat the above searches. If you need to <search>, craft a new query clearly distinct from history and targeting missing information."
+            )
+            messages.append({"role": "user", "content": sh_block})
+        
         if self.current_observation_str:
             obs_prompt = (
                 f"=== Observation ===\n"
@@ -241,131 +251,148 @@ class FactStoreAgent:
         else:
             msg = "Instruction: Fact-Store is empty. Please think and <search>." if not self.visible_facts else "Instruction: Please think and verify if you can <answer> or need to <search> more."
             messages.append({"role": "user", "content": msg})
-                
+        
         return messages
-
+                
     def parse_and_execute(self, response: str) -> bool:
         # Print Thought Process for debugging
         # think_match = re.search(r"<think>(.*?)</think>", response, re.DOTALL)
         # if think_match:
         #     print(f"\n[Thought Process]:\n{think_match.group(1).strip()}\n")
-        
-        # === Phase 1: Assert ===
-        assert_matches = re.findall(r"<assert>(.*?)</assert>", response)
-        assert_matches = [m.strip() for m in assert_matches if m.strip()]
-        
-        if assert_matches:
-            print(f"   [Action] Processing {len(assert_matches)} Assertions...")
-            step_reward = 0
-            new_facts = []
-            
-            context_for_reward = self.current_observation_str if self.current_observation_str else ""
 
-            for content in assert_matches:
-                parts = [p.strip() for p in content.split(',', 2)]
-                if len(parts) == 3:
-                    triple = (parts[0], parts[1], parts[2])
-                    
-                    reward_res = self.engine.calculate_reward(triple, context_for_reward)
-                    r = reward_res["reward"]
-                    
-                    # Coverage Bonus
-                    gold_idx = reward_res.get("gold_idx", -1)
-                    bonus = 0.0
-                    if reward_res["type"] == "HIT_GOLD":
-                        if gold_idx not in self.covered_gold_indices:
-                            self.covered_gold_indices.add(gold_idx)
-                            bonus = 0.2
-                            print(f"        [BONUS] New Gold Fact! (+0.2)")
-                    
-                    total_r = r + bonus
-                    step_reward += total_r
-                    
-                    print(f"     -> Assert: {triple}")
-                    print(f"        Type: [{reward_res['type']}] Sim: {reward_res['score']:.4f} Total: {total_r:+.1f}")
-                    
-                    if reward_res['type'] in ['HIT_GOLD', 'WEAK_MATCH']:
-                        fact_str = f"{parts[0]}, {parts[1]}, {parts[2]}"
-                        if fact_str not in self.visible_facts:
-                            self.visible_facts.append(fact_str)
-                            new_facts.append(fact_str)
-                            self.evidence_db[fact_str] = context_for_reward
-            
-            if new_facts:
-                self.history_summary.append(f"- Asserted {len(new_facts)} facts")
-            elif assert_matches:
-                self.history_summary.append(f"- {len(assert_matches)} assertions rejected (low quality/distractor).")
+        # More robustly find the last occurrence of each action's end tag.
+        def find_last_pos(pattern, text):
+            matches = list(re.finditer(pattern, text, re.DOTALL))
+            if not matches:
+                return -1
+            return matches[-1].end()
 
-            print(f"   [Step Total Reward] {step_reward:.2f}")
-            self.current_observation_str = None
+        actions = {
+            'search': find_last_pos(r'</search>', response),
+            'assert': find_last_pos(r'</assert>', response), # Asserts are expected to be well-formed.
+            'retrieve': find_last_pos(r'</retriev', response),
+            'answer': find_last_pos(r'</answe', response),
+        }
 
-        # === Phase 2: Search ===
-        search_match = re.search(r"<search>(.*?)</search>", response, re.DOTALL)
-        if search_match:
-            query = search_match.group(1).strip()
-            if query in self.searched_queries:
-                print(f"   [Blocked] Duplicate Search: {query}")
-            else:
-                self.searched_queries.add(query)
-                print(f"   [Action] Search: {query}")
-                
-                obs_str = self.engine.search(query)
-                self.current_observation_str = obs_str
-                
-                self.history_summary.append(f"- Search: {query}")
-                print(f"\n{'='*20} Retrieved Information {'='*20}")
-                print(obs_str)
-                print(f"{'='*62}\n")
-                return True
-
-        # === Phase 3: Retrieve ===
-        retrieve_match = re.search(r"<retrieve>(.*?)</retrieve>", response, re.DOTALL)
-        if retrieve_match:
-            content = retrieve_match.group(1).strip()
-            parts = [p.strip() for p in content.split(',', 2)]
-            if len(parts) == 3:
-                fact_key = f"{parts[0]}, {parts[1]}, {parts[2]}"
-                print(f"   [Action] Retrieve: {fact_key}")
-                
-                source_text = self.evidence_db.get(fact_key)
-                
-                # If exact match is not found, find the most similar key
-                if source_text is None:
-                    print(f"        -> Exact fact not in Evidence DB. Finding most similar fact...")
-                    if self.evidence_db:
-                        # Encode the query fact
-                        query_emb = self.engine.encode_texts([fact_key], is_query=True)
-                        
-                        # Encode all keys in the evidence_db
-                        db_keys = list(self.evidence_db.keys())
-                        db_keys_embs = self.engine.encode_texts(db_keys, is_query=False) # Treat keys as passages for comparison
-                        
-                        # Compute similarity
-                        scores = (query_emb @ db_keys_embs.T)[0]
-                        best_match_idx = np.argmax(scores)
-                        best_match_key = db_keys[best_match_idx]
-                        best_match_score = scores[best_match_idx]
-                        
-                        print(f"        -> Best match (Score: {best_match_score:.4f}): {best_match_key}")
-                        source_text = self.evidence_db[best_match_key]
-                    else:
-                        source_text = "No record found in an empty Evidence DB."
-                self.current_observation_str = f"Fact: <{fact_key}>\nSource:\n{source_text}"
-                self.history_summary.append(f"- Retrieve: {fact_key}")
-                print(f"\n{'='*20} Retrieved Evidence {'='*20}\n{source_text}\n{'='*62}\n")
-                return True
-
-        # === Phase 4: Answer ===
-        answer_match = re.search(r"<answer>(.*?)</answer>", response, re.DOTALL)
-        if answer_match:
-            ans = answer_match.group(1).strip()
-            print(f"\n>>> [Final Answer]: {ans}")
-            return False 
-
-        if assert_matches:
+        valid_actions = {k: v for k, v in actions.items() if v != -1}
+        if not valid_actions:
+            print("   [Warning] Unable to parse action.")
             return True
 
-        print("   [Warning] Unable to parse action.")
+        last_action = max(valid_actions, key=valid_actions.get)
+
+        # Execute the last action
+        if last_action == 'search':
+            # Robustly find all matches and process the last one.
+            search_matches = re.findall(r"[<=]?search>(.*?)</search>", response, re.DOTALL)
+            if search_matches:
+                query = search_matches[-1].strip()
+                if query in self.searched_queries:
+                    print(f"   [Blocked] Duplicate Search: {query}")
+                else:
+                    self.searched_queries.add(query)
+                    self.search_history.append(query)
+                    print(f"   [Action] Search: {query}")
+                    
+                    obs_str = self.engine.search(query)
+                    self.current_observation_str = obs_str
+                    
+                    self.history_summary.append(f"- Search: {query}")
+                    print(f"\n{'='*20} Retrieved Information {'='*20}")
+                    print(obs_str)
+                    print(f"{'='*62}\n")
+                return True
+
+        elif last_action == 'assert':
+            # This part is already robust for multiple asserts.
+            assert_matches = re.findall(r"<assert>(.*?)</assert>", response, re.DOTALL)
+            assert_matches = [m.strip() for m in assert_matches if m.strip()]
+            
+            if assert_matches:
+                print(f"   [Action] Processing {len(assert_matches)} Assertions...")
+                step_reward = 0
+                new_facts = []
+                
+                context_for_reward = self.current_observation_str if self.current_observation_str else ""
+
+                for content in assert_matches:
+                    parts = [p.strip() for p in content.split(',', 2)]
+                    if len(parts) == 3:
+                        triple = (parts[0], parts[1], parts[2])
+                        
+                        reward_res = self.engine.calculate_reward(triple, context_for_reward)
+                        r = reward_res["reward"]
+                        
+                        # Coverage Bonus
+                        gold_idx = reward_res.get("gold_idx", -1)
+                        bonus = 0.0
+                        if reward_res["type"] == "HIT_GOLD":
+                            if gold_idx not in self.covered_gold_indices:
+                                self.covered_gold_indices.add(gold_idx)
+                                bonus = 0.2
+                                print(f"        [BONUS] New Gold Fact! (+0.2)")
+                        
+                        total_r = r + bonus
+                        step_reward += total_r
+                        
+                        print(f"     -> Assert: {triple}")
+                        print(f"        Type: [{reward_res['type']}] Sim: {reward_res['score']:.4f} Total: {total_r:+.1f}")
+                        
+                        if reward_res['type'] in ['HIT_GOLD', 'WEAK_MATCH']:
+                            fact_str = f"{parts[0]}, {parts[1]}, {parts[2]}"
+                            if fact_str not in self.visible_facts:
+                                self.visible_facts.append(fact_str)
+                                new_facts.append(fact_str)
+                                self.evidence_db[fact_str] = context_for_reward
+                
+                if new_facts:
+                    self.history_summary.append(f"- Asserted {len(new_facts)} facts")
+                elif assert_matches:
+                    self.history_summary.append(f"- {len(assert_matches)} assertions rejected (low quality/distractor).")
+
+                print(f"   [Step Total Reward] {step_reward:.2f}")
+                self.current_observation_str = None
+            return True
+
+        elif last_action == 'retrieve':
+            retrieve_matches = re.findall(r"[<=]?retrieve>(.*?)</retriev", response, re.DOTALL)
+            if retrieve_matches:
+                content = retrieve_matches[-1].strip()
+                parts = [p.strip() for p in content.split(',', 2)]
+                if len(parts) == 3:
+                    fact_key = f"{parts[0]}, {parts[1]}, {parts[2]}"
+                    print(f"   [Action] Retrieve: {fact_key}")
+                    
+                    source_text = self.evidence_db.get(fact_key)
+                    
+                    if source_text is None:
+                        print(f"        -> Exact fact not in Evidence DB. Finding most similar fact...")
+                        if self.evidence_db:
+                            query_emb = self.engine.encode_texts([fact_key], is_query=True)
+                            db_keys = list(self.evidence_db.keys())
+                            db_keys_embs = self.engine.encode_texts(db_keys, is_query=False)
+                            scores = (query_emb @ db_keys_embs.T)[0]
+                            best_match_idx = np.argmax(scores)
+                            best_match_key = db_keys[best_match_idx]
+                            best_match_score = scores[best_match_idx]
+                            
+                            print(f"        -> Best match (Score: {best_match_score:.4f}): {best_match_key}")
+                            source_text = self.evidence_db[best_match_key]
+                        else:
+                            source_text = "No record found in an empty Evidence DB."
+                    self.current_observation_str = f"Fact: <{fact_key}>\nSource:\n{source_text}"
+                    self.history_summary.append(f"- Retrieve: {fact_key}")
+                    print(f"\n{'='*20} Retrieved Evidence {'='*20}\n{source_text}\n{'='*62}\n")
+                return True
+
+        elif last_action == 'answer':
+            answer_matches = re.findall(r"[<=]?answer>(.*?)</answe", response, re.DOTALL)
+            if answer_matches:
+                ans = answer_matches[-1].strip()
+                print(f"\n>>> [Final Answer]: {ans}")
+                return False 
+
+        print("   [Warning] Unable to parse action (last action was identified but content extraction failed).")
         return True
 
     def run(self, query: str, max_steps=10):
@@ -393,11 +420,11 @@ def load_hotpot_sample(index=0):
     Load a single sample from HotpotQA validation set and format it for the agent.
     """
     print(">>> Loading HotpotQA Dataset (distractor/validation)...")
-    dataset = load_dataset("hotpot_qa", "fullwiki", split="test", trust_remote_code=True)
+    dataset = load_dataset("hotpot_qa", "fullwiki", split="train", trust_remote_code=True)
     print(len(dataset))
     data = dataset[index]
     question = data["question"]
-    
+    print(data["answer"])
     # 1. Build Corpus from Context
     corpus = []
     for title, sentences in zip(data["context"]["title"], data["context"]["sentences"]):

@@ -47,7 +47,7 @@ class ModelEngineV1:
             use_fp16=True,
             index_path="/data1/rzzhu/wiki-2018/e5_Flat.index",
             corpus_path="/data1/rzzhu/wiki-2018/wiki-18.jsonl",
-            topk=2, # Default top_k for searches
+            topk=3, # Default top_k for searches
             faiss_gpu=False # As requested, use CPU for Faiss
         )
         
@@ -76,13 +76,13 @@ class ModelEngineV1:
             messages, add_generation_prompt=True, return_tensors='pt'
         ).cuda()
         out = self.model_llm.generate(
-            input_ids=input_ids, max_new_tokens=512, do_sample=True, temperature=0.3, top_p=0.9,
+            input_ids=input_ids, max_new_tokens=512, do_sample=True, temperature=0.7, top_p=0.8,top_k = 20,
             pad_token_id=self.tokenizer_llm.pad_token_id
         )
         gen_ids = out[0][input_ids.shape[-1]:]
         return self.tokenizer_llm.decode(gen_ids, skip_special_tokens=True)
 
-    def search(self, query: str, top_k=2) -> str:
+    def search(self, query: str, top_k=3) -> str:
         """
         Returns formatted string of top-k documents by calling the global retriever.
         """
@@ -103,7 +103,7 @@ class ModelEngineV1:
         return "\n\n".join(result_strs)
 
     def calculate_reward(self, triple: Tuple[str,str,str], current_context: str) -> Dict:
-        return {"reward": 0.5, "type": "HIT_GOLD", "gold_idx": max_gold_idx, "score": max_gold_score, "desc": "Core Fact Hit"}
+        return {"reward": 0.5, "type": "HIT_GOLD", "gold_idx": 1, "score": 1, "desc": "Core Fact Hit"}
         t_text = f"{triple[0]} {triple[1]} {triple[2]}"
         t_emb = self.reward_encoder.encode([t_text], is_query=True)
         
@@ -138,7 +138,7 @@ from fact_store import FactStoreAgent, load_hotpot_sample
 
 if __name__ == "__main__":
     # 1. Load Data (We still load this to get the question and gold facts for reward)
-    query, _, gold_facts = load_hotpot_sample(index=0)
+    query, _, gold_facts = load_hotpot_sample(index=1)
     
     # 2. Initialize NEW Engine
     engine = ModelEngineV1()

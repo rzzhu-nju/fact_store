@@ -90,7 +90,7 @@ class ModelEngineV1:
         results, _ = self.retriever.search(query, num=top_k)
         
         result_strs = []
-        for i, doc in enumerate(results):
+        for i, doc in enumerate(results[0]):
             # Extract content and length as we did in simple_retrieval.py
             contents = doc.get('contents', '')
             title = contents.split('\n')[0].strip('"')

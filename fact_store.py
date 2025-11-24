@@ -16,7 +16,7 @@ import re
 import torch
 import numpy as np
 from typing import List, Dict, Tuple, Any
-
+import json
 from transformers import AutoTokenizer, AutoModelForCausalLM, AutoModel
 from datasets import load_dataset
 
@@ -194,65 +194,84 @@ class FactStoreAgent:
         
         # Updated Search-R1 style Prompt with Fact-Store constraints
         return (
-            "You are a verifiable reasoning agent based on a **Fact-Store** architecture.\n"
-            "Your goal is to build a knowledge graph to answer the user's question accurately.\n\n"
+            "You are a verifiable reasoning agent based on a **Fact-Store** architecture.\n\n"
+            
+            "**INPUT STRUCTURE**:\n"
+            "The user will provide a message containing the following sections:\n"
+            "1. **Task**: The question you need to answer.\n"
+            "2. **History**: A summary of your past actions and their results.\n"
+            "3. **Executed Searches**: Queries you have already performed (to avoid duplication).\n"
+            "4. **Observation**: The text documents retrieved by your LAST <search> action. "
+            "**NOTE**: If your last action was NOT <search>, this section will be None/Empty.\n\n"
             
             "**CORE RULES**:\n"
             "1. **Reasoning First**: You must conduct reasoning inside <think>...</think> before generating any action.\n"
-            "2. **No Hallucination**: You cannot answer from your internal training memory. You must <search>, read the observation, and <assert> facts.\n"
-            "3. **Fact-Dependency**: Your final <answer> must be strictly derived from the **Current Fact-Store**.\n\n"
+            "2. **No Hallucination**: You cannot answer from your internal training memory. You must <search>, read the Observation, and <assert> facts.\n"
+            "3. **Fact-Dependency**: Your final <answer> must be strictly derived from the **Current Fact-Store**.\n"
             "4. **Format requirement**: You must enclose your action selection within <>.\n"
-            "5. **Avoid Duplicate Searches**: Review the Search History block. Do not repeat executed queries; craft new searches that are clearly distinct.\n"
+            "5. **Avoid Duplicate Searches**: Review the Executed Searches block. Do not repeat executed queries; craft new searches that are clearly distinct.\n\n"
 
-            "**AVAILABLE ACTIONS** (Output only one action type after your <think> block):\n"
-            "- **Acquire Info**: <search>keywords</search>\n"
-            "  (Use this when Fact-Store lacks information. System will return an Observation.)\n\n"
+            "**QUERY REFORMULATION STRATEGIES**:\n"
+            "If your previous search failed (marked as 'NO INFO FOUND' in history), you MUST change your strategy:\n"
+            "1. **Broaden**: Remove specific constraints (e.g., 'Director of movie X' -> 'Movie X cast').\n"
+            "2. **Decompose**: Split complex questions into smaller entities.\n"
+            "3. **Pivot**: Search for related entities mentioned in the question.\n"
+            "4. **Do NOT** generate a query semantically identical to previous ones.\n\n"
             
-            "- **Store Knowledge**: <assert>Subject, Relation, Object</assert>\n"
-            "  (Use this IMMEDIATELY after receiving an Observation. Extract verifiable facts. You can assert multiple triples.)\n\n"
-            
-            "- **Verify Source**: <retrieve>Subject, Relation, Object</retrieve>\n"
-            "  (Use this if you need to check the original context of a stored fact.)\n\n"
-            
-            "- **Final Answer**: <answer>Detailed Answer</answer>\n"
-            "  (Use this only when the Fact-Store contains sufficient evidence.)\n\n"
-        
-                        "**ACTION FORMAT EXAMPLES**\n"
-            "<think>I need to find out the director of the movie 'Inception'.</think>\n"
-            "<search>director of Inception</search>\n\n"
-            "<think>The observation says 'Christopher Nolan directed Inception'. I should store this fact.</think>\n"
-            "<assert>Inception, directed by, Christopher Nolan</assert>\n\n"
+            "**AVAILABLE ACTIONS**:\n"
+            "- <search>keywords</search>: Acquire info.\n"
+            "- <assert>Subject, Relation, Object</assert>: Extract facts from observation.\n"
+            "- <retrieve>Subject, Relation, Object</retrieve>: Check sources.\n"
+            "<answer>Final Answer</answer>: Use Fact-Store to answer. **Your answer MUST be a concise phrase or single word** to facilitate Exact Match (EM) evaluation.\n\n"
             
             f"=== Current Fact-Store ===\n{facts_str}\n\n"
         )
 
     def build_context(self, query: str) -> List[Dict]:
+        """
+        Constructs the context messages.
+        Consolidates all user context (Task, History, Searches, Observation) into a SINGLE user message.
+        """
         messages = [{"role": "system", "content": self.get_system_prompt()}]
-        messages.append({"role": "user", "content": f"Task: {query}"})
         
+        user_content_parts = []
+        
+        # 1. Task
+        user_content_parts.append(f"Task: {query}")
+        
+        # 2. History
         if self.history_summary:
-            messages.append({"role": "user", "content": "History:\n" + "\n".join(self.history_summary)})
+            user_content_parts.append("History:\n" + "\n".join(self.history_summary))
         
+        # 3. Executed Searches
         if self.search_history:
             hist = "\n".join([f"- {q}" for q in self.search_history])
             sh_block = (
-                f"=== Executed Searches ===\n{hist}\n\n"
-                f"Instruction: Do not repeat the above searches. If you need to <search>, craft a new query clearly distinct from history and targeting missing information."
+                f"=== Executed Searches ===\n{hist}\n"
+                f"(Instruction: Do not repeat the above searches. Craft a new query if needed.)"
             )
-            messages.append({"role": "user", "content": sh_block})
+            user_content_parts.append(sh_block)
         
+        # 4. Observation & Instruction
         if self.current_observation_str:
-            obs_prompt = (
+            obs_block = (
                 f"=== Observation ===\n"
-                f"{self.current_observation_str}\n\n"
-                f"Instruction: Analyze the observation inside <think>, then extract facts using <assert>."
+                f"{self.current_observation_str}\n"
             )
-            messages.append({"role": "user", "content": obs_prompt})
+            user_content_parts.append(obs_block)
+            user_content_parts.append("Instruction: Analyze the observation inside <think>, then extract facts using <assert>.")
         else:
+            # Observation is None (implicitly handled by omission or we could explicitly say "Observation: None")
+            # Given instructions, we append the next step guidance.
             msg = "Instruction: Fact-Store is empty. Please think and <search>." if not self.visible_facts else "Instruction: Please think and verify if you can <answer> or need to <search> more."
-            messages.append({"role": "user", "content": msg})
+            user_content_parts.append(msg)
+            
+        # Combine into a single user message
+        full_user_content = "\n\n".join(user_content_parts)
+        messages.append({"role": "user", "content": full_user_content})
         
         return messages
+
                 
     def parse_and_execute(self, response: str) -> bool:
         # Print Thought Process for debugging
@@ -270,8 +289,8 @@ class FactStoreAgent:
         actions = {
             'search': find_last_pos(r'</search>', response),
             'assert': find_last_pos(r'</assert>', response), # Asserts are expected to be well-formed.
-            'retrieve': find_last_pos(r'</retriev', response),
-            'answer': find_last_pos(r'</answe', response),
+            'retrieve': find_last_pos(r'</retrieve>', response),
+            'answer': find_last_pos(r'</answer>', response),
         }
 
         valid_actions = {k: v for k, v in actions.items() if v != -1}
@@ -397,6 +416,8 @@ class FactStoreAgent:
 
     def run(self, query: str, max_steps=10):
         print(f"Task: {query}\n")
+        debug_logs = []
+        log_file = "test.txt"
         for step in range(max_steps):
             print(f"--- Step {step + 1} ---")
             messages = self.build_context(query)
@@ -407,6 +428,32 @@ class FactStoreAgent:
             #     print(f"[{m['role'].upper()}]:\n{content_preview}")
             #     print("-" * 40)
             response = self.engine.generate(messages)
+            # log_entry = {
+            #     "step": step + 1,
+            #     "messages": messages,
+            #     "response": response
+            # }
+            # debug_logs.append(log_entry)
+            # try:
+            #     with open("test.json", "w", encoding="utf-8") as f:
+            #         json.dump(debug_logs, f, ensure_ascii=False, indent=2)
+            # except Exception as e:
+            #     print(f"[Warning] Logging failed: {e}")
+            try:
+                with open(log_file, "a", encoding="utf-8") as f:
+                    f.write(f"--- Step {step + 1} ---\n")
+                    f.write("[MESSAGES]:\n")
+                    for msg in messages:
+                        role = msg['role'].upper()
+                        content = msg['content']
+                        f.write(f"[{role}]:\n{content}\n\n")
+                    
+                    f.write("-" * 40 + "\n")
+                    f.write("[RESPONSE]:\n")
+                    f.write(response)
+                    f.write("\n\n" + "="*60 + "\n\n")
+            except Exception as e:
+                print(f"[Warning] Logging failed: {e}")
             print(f"[LLM Output]: {response}")
             keep_going = self.parse_and_execute(response)
             if not keep_going:

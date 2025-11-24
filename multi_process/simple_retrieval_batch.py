@@ -3,6 +3,8 @@ import os
 import warnings
 from typing import List, Dict, Optional
 import argparse
+import multiprocessing
+from concurrent.futures import ThreadPoolExecutor
 
 import faiss
 import torch
@@ -11,8 +13,20 @@ from transformers import AutoConfig, AutoTokenizer, AutoModel
 from tqdm import tqdm
 import datasets
 
+# --- 配置: 限制 CPU 使用核心数 ---
+CPU_LIMIT = 8
+
+# Set Faiss to use limited CPU cores for index searching
+try:
+    # 限制 Faiss 使用的线程数
+    faiss.omp_set_num_threads(CPU_LIMIT)
+    print(f"Setting Faiss OMP threads to {CPU_LIMIT}")
+except Exception as e:
+    print(f"Warning: Could not set faiss threads: {e}")
+
 def load_corpus(corpus_path: str):
     """Loads a corpus from a JSONL file."""
+    print(f"Loading corpus from {corpus_path}...")
     corpus = datasets.load_dataset(
         'json',
         data_files=corpus_path,
@@ -104,7 +118,7 @@ class Encoder:
         return query_emb
 
 class SimpleDenseRetriever:
-    """A simplified dense retriever for demonstration."""
+    """A simplified dense retriever with true multi-core support."""
     def __init__(self, model_name, model_path, pooling_method, max_length, use_fp16,
                  index_path, corpus_path, topk, faiss_gpu=False):
         self.encoder = Encoder(
@@ -114,6 +128,8 @@ class SimpleDenseRetriever:
             max_length=max_length,
             use_fp16=use_fp16
         )
+        
+        print(f"Loading index from {index_path}...")
         self.index = faiss.read_index(index_path)
         if faiss_gpu and torch.cuda.is_available():
             print("Using GPU for Faiss.")
@@ -121,22 +137,47 @@ class SimpleDenseRetriever:
             co.useFloat16 = True
             co.shard = True
             self.index = faiss.index_cpu_to_all_gpus(self.index, co=co)
+        else:
+            # Ensure Faiss uses limited cores on CPU
+            print(f"Using CPU for Faiss (Limited to {CPU_LIMIT} threads).")
+            faiss.omp_set_num_threads(CPU_LIMIT)
             
         self.corpus = load_corpus(corpus_path)
         self.topk = topk
+        # Thread pool size for fetching docs limited to CPU_LIMIT
+        self.num_threads = CPU_LIMIT
 
     def search(self, queries: List[str] or str, num: int = None):
-        """Performs a search for a batch of queries."""
+        """Performs a search for a batch of queries using threads for document fetching."""
         if isinstance(queries, str):
             queries = [queries]
         if num is None:
             num = self.topk
+            
+        # 1. Encode (Vectorized on GPU/CPU)
         query_embs = self.encoder.encode(queries)
+        
+        # 2. Search Index (Parallelized via Faiss OMP)
         scores, idxs = self.index.search(query_embs, k=num)
         
-        results = []
-        for i in range(len(queries)):
-            results.append(load_docs(self.corpus, idxs[i]))
+        # 3. Fetch Documents (Parallelized via ThreadPool)
+        results = [None] * len(queries)
+        
+        def fetch_doc(i):
+            return load_docs(self.corpus, idxs[i])
+
+        # Limit thread pool to CPU_LIMIT to avoid overloading the server
+        with ThreadPoolExecutor(max_workers=self.num_threads) as executor:
+            # Submit all fetch tasks
+            futures = {executor.submit(fetch_doc, i): i for i in range(len(queries))}
+            for future in futures:
+                i = futures[future]
+                try:
+                    results[i] = future.result()
+                except Exception as e:
+                    print(f"Error fetching docs for query index {i}: {e}")
+                    results[i] = []
+
         return results, scores.tolist()
 
 if __name__ == "__main__":
@@ -145,7 +186,7 @@ if __name__ == "__main__":
     CORPUS_PATH = "/data1/rzzhu/wiki-2018/wiki-18.jsonl"
     MODEL_PATH = "/data1/shares/e5-base-v2"
     MODEL_NAME = "e5"
-    QUERY = "Which magazine was started first Arthur's Magazine or First for Women?"
+    QUERY = ["Which magazine was started first Arthur's Magazine or First for Women?", "Who is the author of The Three-Body Problem?"]
 
     # --- Instantiate Retriever ---
     retriever = SimpleDenseRetriever(
@@ -161,17 +202,15 @@ if __name__ == "__main__":
     )
 
     # --- Perform Search ---
-    print(f"Searching for: '{QUERY}'")
+    print(f"Searching for: {QUERY}")
     results, scores = retriever.search(QUERY)
 
     # --- Print Results ---
     print("\n--- Top Results ---")
-    for i, (doc, score) in enumerate(zip(results, scores)):
-        # The corpus from wiki-18.jsonl seems to have 'title' and 'text' fields.
-        title = doc.get('contents', '').split('\n')[0].strip('"')
-        text = '\n'.join(doc.get('contents', '').split('\n')[1:])
-        print(f"Rank {i+1} (Score: {score:.4f}):")
-        print(f"  Title: {title}")
-        print(f"  Length: {len(doc.get('contents', ''))} characters")
-        print(f"  Text: {text[:300]}...")
-        print("-" * 20)
+    for q_idx, q_res in enumerate(results):
+        print(f"\nQuery: {QUERY[q_idx]}")
+        for i, doc in enumerate(q_res):
+            # The corpus from wiki-18.jsonl usually has 'contents' or 'text' fields. 
+            # Adjust parsing based on your specific jsonl structure.
+            content = doc.get('contents', '')
+            print(f"Rank {i+1}: {content[:100]}...")

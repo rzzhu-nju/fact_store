@@ -1,260 +1,506 @@
-Task: 刘慈欣的出生地在哪里？该城市最著名的皇家园林是什么？它始建于哪个朝代？
-
 --- Step 1 ---
-
-[Model Input Messages]
+[MESSAGES]:
 [SYSTEM]:
-你是一个基于 Fact-Store 的推理 Agent。你的目标是通过构建知识图谱来回答问题。
-**严格遵守以下规则**：
-1. 你不能利用模型内部训练数据的记忆直接回答，必须通过 <search> 获取证据，然后 <assert> 存入 Fact-Store。
-2. **一次只执行一类动作**：
-   - 如果需要信息：输出 <search>查询query</search>。**输出后立即结束，等待 Observation**。
-   - 如果已有 Observation：输出 <assert>S, R, O</assert>。可以一次输出多条 assert。
-   - 如果 Fact-Store 足够：输出 <answer>答案</answer>。
-3. <assert> 的内容必须来源于当前的 Observation。
+You are a verifiable reasoning agent based on a **Fact-Store** architecture.
 
-=== 当前 Fact-Store (长期记忆) ===
-(空)
+**INPUT STRUCTURE**:
+The user will provide a message containing the following sections:
+1. **Task**: The question you need to answer.
+2. **History**: A summary of your past actions and their results.
+3. **Executed Searches**: Queries you have already performed (to avoid duplication).
+4. **Observation**: The text documents retrieved by your LAST <search> action. **NOTE**: If your last action was NOT <search>, this section will be None/Empty.
+
+**CORE RULES**:
+1. **Reasoning First**: You must conduct reasoning inside <think>...</think> before generating any action.
+2. **No Hallucination**: You cannot answer from your internal training memory. You must <search>, read the Observation, and <assert> facts.
+3. **Fact-Dependency**: Your final <answer> must be strictly derived from the **Current Fact-Store**.
+4. **Format requirement**: You must enclose your action selection within <>.
+5. **Avoid Duplicate Searches**: Review the Executed Searches block. Do not repeat executed queries; craft new searches that are clearly distinct.
+
+**QUERY REFORMULATION STRATEGIES**:
+If your previous search failed (marked as 'NO INFO FOUND' in history), you MUST change your strategy:
+1. **Broaden**: Remove specific constraints (e.g., 'Director of movie X' -> 'Movie X cast').
+2. **Decompose**: Split complex questions into smaller entities.
+3. **Pivot**: Search for related entities mentioned in the question.
+4. **Do NOT** generate a query semantically identical to previous ones.
+
+**AVAILABLE ACTIONS**:
+- <search>keywords</search>: Acquire info.
+- <assert>Subject, Relation, Object</assert>: Extract facts from observation.
+- <retrieve>Subject, Relation, Object</retrieve>: Check sources.
+<answer>Final Answer</answer>: Use Fact-Store to answer. **Your answer MUST be a concise phrase or single word** to facilitate Exact Match (EM) evaluation.
+
+=== Current Fact-Store ===
+(Empty)
 
 
-----------------------------------------
+
 [USER]:
-任务目标：刘慈欣的出生地在哪里？该城市最著名的皇家园林是什么？它始建于哪个朝代？
+Task: The Oberoi family is part of a hotel company that has a head office in what city?
+
+Instruction: Fact-Store is empty. Please think and <search>.
+
 ----------------------------------------
-[USER]:
-指令：Fact-Store 为空，请先 <search> 相关信息。
-----------------------------------------
+[RESPONSE]:
+<search>Oberoi hotel company headquarters location</search>
 
-
-The attention mask is not set and cannot be inferred from input because pad token is same as eos token. As a consequence, you may observe unexpected behavior. Please pass your input's `attention_mask` to obtain reliable results.
-[LLM Output]: <search>刘慈欣 出生地</search>
-   [Action] Search: 刘慈欣 出生地
-
-==================== Retrieved Information ====================
-[Doc 1]
-"刘慈欣生平"
-刘慈欣，1963年6月出生于北京，祖籍河南罗山。他是中国科幻小说的代表人物。虽然他在山西阳泉长大并工作，但他的出生地是北京。
-
-[Doc 2]
-"莫言"
-莫言，中国当代作家，2012年获得诺贝尔文学奖，出生于山东高密。
-==============================================================
+============================================================
 
 --- Step 2 ---
-
-[Model Input Messages]
+[MESSAGES]:
 [SYSTEM]:
-你是一个基于 Fact-Store 的推理 Agent。你的目标是通过构建知识图谱来回答问题。
-**严格遵守以下规则**：
-1. 你不能利用模型内部训练数据的记忆直接回答，必须通过 <search> 获取证据，然后 <assert> 存入 Fact-Store。
-2. **一次只执行一类动作**：
-   - 如果需要信息：输出 <search>查询query</search>。**输出后立即结束，等待 Observation**。
-   - 如果已有 Observation：输出 <assert>S, R, O</assert>。可以一次输出多条 assert。
-   - 如果 Fact-Store 足够：输出 <answer>答案</answer>。
-3. <assert> 的内容必须来源于当前的 Observation。
+You are a verifiable reasoning agent based on a **Fact-Store** architecture.
 
-=== 当前 Fact-Store (长期记忆) ===
-(空)
+**INPUT STRUCTURE**:
+The user will provide a message containing the following sections:
+1. **Task**: The question you need to answer.
+2. **History**: A summary of your past actions and their results.
+3. **Executed Searches**: Queries you have already performed (to avoid duplication).
+4. **Observation**: The text documents retrieved by your LAST <search> action. **NOTE**: If your last action was NOT <search>, this section will be None/Empty.
+
+**CORE RULES**:
+1. **Reasoning First**: You must conduct reasoning inside <think>...</think> before generating any action.
+2. **No Hallucination**: You cannot answer from your internal training memory. You must <search>, read the Observation, and <assert> facts.
+3. **Fact-Dependency**: Your final <answer> must be strictly derived from the **Current Fact-Store**.
+4. **Format requirement**: You must enclose your action selection within <>.
+5. **Avoid Duplicate Searches**: Review the Executed Searches block. Do not repeat executed queries; craft new searches that are clearly distinct.
+
+**QUERY REFORMULATION STRATEGIES**:
+If your previous search failed (marked as 'NO INFO FOUND' in history), you MUST change your strategy:
+1. **Broaden**: Remove specific constraints (e.g., 'Director of movie X' -> 'Movie X cast').
+2. **Decompose**: Split complex questions into smaller entities.
+3. **Pivot**: Search for related entities mentioned in the question.
+4. **Do NOT** generate a query semantically identical to previous ones.
+
+**AVAILABLE ACTIONS**:
+- <search>keywords</search>: Acquire info.
+- <assert>Subject, Relation, Object</assert>: Extract facts from observation.
+- <retrieve>Subject, Relation, Object</retrieve>: Check sources.
+<answer>Final Answer</answer>: Use Fact-Store to answer. **Your answer MUST be a concise phrase or single word** to facilitate Exact Match (EM) evaluation.
+
+=== Current Fact-Store ===
+(Empty)
 
 
-----------------------------------------
+
 [USER]:
-任务目标：刘慈欣的出生地在哪里？该城市最著名的皇家园林是什么？它始建于哪个朝代？
+Task: The Oberoi family is part of a hotel company that has a head office in what city?
+
+History:
+- Search: Oberoi hotel company headquarters location
+
+=== Executed Searches ===
+- Oberoi hotel company headquarters location
+(Instruction: Do not repeat the above searches. Craft a new query if needed.)
+
+=== Observation ===
+[Doc 1] Title: Mohan Singh Oberoi (Length: 632 chars)
+Mohan Singh Oberoi Rai Bahadur Mohan Singh Oberoi (15 August 1898 – 3 May 2002) was an Indian hotelier, the founder and chairman of Oberoi Hotels & Resorts, India's second-largest hotel company, with 35 hotels in India, Egypt, Indonesia, UAE, Mauritius and Saudi Arabia. In his obituary the Times of India said that he was acknowledged for putting the Indian hoteliering on the global map by successfully establishing hotel brands like Oberoi and Trident worldwide. M. S.Oberoi was born in a Punjabi Sikh family in Bhaun, a minor village of Jhelum District (now Chakwal District), Punjab, British India. When he
+
+[Doc 2] Title: The Oberoi, Gurgaon (Length: 606 chars)
+The Oberoi, Gurgaon The Oberoi, Gurgaon is a luxury hotel in Gurgaon, the business hub on the outskirts of capital New Delhi. Owned by Gurgaon-based developers ""Orbit Resorts"" the owner is Parkash Singh Badal and managed by The Oberoi Hotels & Resorts chain, it was built at a cost of and opened on 13 April 2011 catering mainly to business travellers. The hotel is situated right next to the Trident Hotel property close to NH-8, also under a management contract with Orbit Resorts. In January 2012, it became the first Indian luxury hotel to be named, ""the World's Leading Luxury
+
+[Doc 3] Title: The Oberoi Group (Length: 598 chars)
+The Oberoi Group The Oberoi Group is a hotel group with its head office in Delhi. Founded in 1934, the company owns and/or operates 35 luxury hotels and two river cruise ships in six countries, primarily under its Oberoi Hotels & Resorts and Trident Hotels brands. The foundations of the Oberoi Group date back to 1934 when Rai Bahadur Mohan Singh Oberoi, the founder of the group, bought two properties: the Maidens in Delhi and the Clarke's in Shimla. In the following years Oberoi, assisted by his two sons, Tilak Raj Singh Oberoi and Prithvi Raj Singh Oberoi (P.R.S. Oberoi),
+
+
+Instruction: Analyze the observation inside <think>, then extract facts using <assert>.
+
 ----------------------------------------
-[USER]:
-已执行的操作历史：
-- Search: 刘慈欣 出生地
-----------------------------------------
-[USER]:
-=== 新的 Observation (短期记忆) ===
-[Doc 1]
-"刘慈欣生平"
-刘慈欣，1963年6月出生于北京，祖籍河南罗山。他是中国科幻小说的代表人物。虽然他在山西阳泉长大并工作，但他的出生地是北京。
+[RESPONSE]:
+<think>
+From the observation, Doc 3 clearly states that "The Oberoi Group is a hotel group with its head office in Delhi." This directly answers the question about the city where the head office of the Oberoi family's hotel company is located.
+</think>
+<assert>
+Oberoi Group, head office city, Delhi
+</assert>
+<answer>
+Delhi
+</answer>
 
-[Doc 2]
-"莫言"
-莫言，中国当代作家，2012年获得诺贝尔文学奖，出生于山东高密。
+============================================================
 
-指令：请阅读上述 Observation，使用 <assert>S, R, O</assert> 提取关键事实。
-----------------------------------------
-
-
-[LLM Output]: <assert>刘慈欣, 出生地, 北京</assert>
-<assert>北京, 祖籍, 河南罗山</assert>
-   [Action] Processing 2 Assertions...
-     -> Stored: ('刘慈欣', '出生地', '北京') (Reward: +0.5)
-     -> Stored: ('北京', '祖籍', '河南罗山') (Reward: -0.2)
-   [Step Reward] 0.30
---- Step 3 ---
-
-[Model Input Messages]
+--- Step 1 ---
+[MESSAGES]:
 [SYSTEM]:
-你是一个基于 Fact-Store 的推理 Agent。你的目标是通过构建知识图谱来回答问题。
-**严格遵守以下规则**：
-1. 你不能利用模型内部训练数据的记忆直接回答，必须通过 <search> 获取证据，然后 <assert> 存入 Fact-Store。
-2. **一次只执行一类动作**：
-   - 如果需要信息：输出 <search>查询query</search>。**输出后立即结束，等待 Observation**。
-   - 如果已有 Observation：输出 <assert>S, R, O</assert>。可以一次输出多条 assert。
-   - 如果 Fact-Store 足够：输出 <answer>答案</answer>。
-3. <assert> 的内容必须来源于当前的 Observation。
+You are a verifiable reasoning agent based on a **Fact-Store** architecture.
 
-=== 当前 Fact-Store (长期记忆) ===
-1. <刘慈欣, 出生地, 北京>
-2. <北京, 祖籍, 河南罗山>
+**INPUT STRUCTURE**:
+The user will provide a message containing the following sections:
+1. **Task**: The question you need to answer.
+2. **History**: A summary of your past actions and their results.
+3. **Executed Searches**: Queries you have already performed (to avoid duplication).
+4. **Observation**: The text documents retrieved by your LAST <search> action. **NOTE**: If your last action was NOT <search>, this section will be None/Empty.
+
+**CORE RULES**:
+1. **Reasoning First**: You must conduct reasoning inside <think>...</think> before generating any action.
+2. **No Hallucination**: You cannot answer from your internal training memory. You must <search>, read the Observation, and <assert> facts.
+3. **Fact-Dependency**: Your final <answer> must be strictly derived from the **Current Fact-Store**.
+4. **Format requirement**: You must enclose your action selection within <>.
+5. **Avoid Duplicate Searches**: Review the Executed Searches block. Do not repeat executed queries; craft new searches that are clearly distinct.
+
+**QUERY REFORMULATION STRATEGIES**:
+If your previous search failed (marked as 'NO INFO FOUND' in history), you MUST change your strategy:
+1. **Broaden**: Remove specific constraints (e.g., 'Director of movie X' -> 'Movie X cast').
+2. **Decompose**: Split complex questions into smaller entities.
+3. **Pivot**: Search for related entities mentioned in the question.
+4. **Do NOT** generate a query semantically identical to previous ones.
+
+**AVAILABLE ACTIONS**:
+- <search>keywords</search>: Acquire info.
+- <assert>Subject, Relation, Object</assert>: Extract facts from observation.
+- <retrieve>Subject, Relation, Object</retrieve>: Check sources.
+<answer>Final Answer</answer>: Use Fact-Store to answer. **Your answer MUST be a concise phrase or single word** to facilitate Exact Match (EM) evaluation.
+
+=== Current Fact-Store ===
+(Empty)
 
 
-----------------------------------------
+
 [USER]:
-任务目标：刘慈欣的出生地在哪里？该城市最著名的皇家园林是什么？它始建于哪个朝代？
-----------------------------------------
-[USER]:
-已执行的操作历史：
-- Search: 刘慈欣 出生地
-- Asserted 2 facts
-----------------------------------------
-[USER]:
-指令：根据 Fact-Store 继续推理。如需更多信息请 <search>，如足够请 <answer>。
-----------------------------------------
+Task: The Oberoi family is part of a hotel company that has a head office in what city?
 
+Instruction: Fact-Store is empty. Please think and <search>.
 
-[LLM Output]: <assert>刘慈欣, 出生地, 北京</assert>
-   [Action] Processing 1 Assertions...
-     -> Duplicate: ('刘慈欣', '出生地', '北京')
-   [Step Reward] 0.50
---- Step 4 ---
+----------------------------------------
+[RESPONSE]:
+<search>Oberoi family hotel company headquarters city</search>
 
-[Model Input Messages]
+============================================================
+
+--- Step 1 ---
+[MESSAGES]:
 [SYSTEM]:
-你是一个基于 Fact-Store 的推理 Agent。你的目标是通过构建知识图谱来回答问题。
-**严格遵守以下规则**：
-1. 你不能利用模型内部训练数据的记忆直接回答，必须通过 <search> 获取证据，然后 <assert> 存入 Fact-Store。
-2. **一次只执行一类动作**：
-   - 如果需要信息：输出 <search>查询query</search>。**输出后立即结束，等待 Observation**。
-   - 如果已有 Observation：输出 <assert>S, R, O</assert>。可以一次输出多条 assert。
-   - 如果 Fact-Store 足够：输出 <answer>答案</answer>。
-3. <assert> 的内容必须来源于当前的 Observation。
+You are a verifiable reasoning agent based on a **Fact-Store** architecture.
 
-=== 当前 Fact-Store (长期记忆) ===
-1. <刘慈欣, 出生地, 北京>
-2. <北京, 祖籍, 河南罗山>
+**INPUT STRUCTURE**:
+The user will provide a message containing the following sections:
+1. **Task**: The question you need to answer.
+2. **History**: A summary of your past actions and their results.
+3. **Executed Searches**: Queries you have already performed (to avoid duplication).
+4. **Observation**: The text documents retrieved by your LAST <search> action. **NOTE**: If your last action was NOT <search>, this section will be None/Empty.
+
+**CORE RULES**:
+1. **Reasoning First**: You must conduct reasoning inside <think>...</think> before generating any action.
+2. **No Hallucination**: You cannot answer from your internal training memory. You must <search>, read the Observation, and <assert> facts.
+3. **Fact-Dependency**: Your final <answer> must be strictly derived from the **Current Fact-Store**.
+4. **Format requirement**: You must enclose your action selection within <>.
+5. **Avoid Duplicate Searches**: Review the Executed Searches block. Do not repeat executed queries; craft new searches that are clearly distinct.
+
+**QUERY REFORMULATION STRATEGIES**:
+If your previous search failed (marked as 'NO INFO FOUND' in history), you MUST change your strategy:
+1. **Broaden**: Remove specific constraints (e.g., 'Director of movie X' -> 'Movie X cast').
+2. **Decompose**: Split complex questions into smaller entities.
+3. **Pivot**: Search for related entities mentioned in the question.
+4. **Do NOT** generate a query semantically identical to previous ones.
+
+**AVAILABLE ACTIONS**:
+- <search>keywords</search>: Acquire info.
+- <assert>Subject, Relation, Object</assert>: Extract facts from observation.
+- <retrieve>Subject, Relation, Object</retrieve>: Check sources.
+<answer>Final Answer</answer>: Use Fact-Store to answer. **Your answer MUST be a concise phrase or single word** to facilitate Exact Match (EM) evaluation.
+
+=== Current Fact-Store ===
+(Empty)
 
 
-----------------------------------------
+
 [USER]:
-任务目标：刘慈欣的出生地在哪里？该城市最著名的皇家园林是什么？它始建于哪个朝代？
+Task: The Oberoi family is part of a hotel company that has a head office in what city?
+
+Instruction: Fact-Store is empty. Please think and <search>.
+
 ----------------------------------------
-[USER]:
-已执行的操作历史：
-- Search: 刘慈欣 出生地
-- Asserted 2 facts
-- Asserted 0 facts
-----------------------------------------
-[USER]:
-指令：根据 Fact-Store 继续推理。如需更多信息请 <search>，如足够请 <answer>。
-----------------------------------------
+[RESPONSE]:
+<search>Oberoi hotel company headquarters location</search>
 
+============================================================
 
-[LLM Output]: <search>刘慈欣 出生地 北京 最著名的皇家园林 建始朝代</search>
-   [Action] Search: 刘慈欣 出生地 北京 最著名的皇家园林 建始朝代
-
-==================== Retrieved Information ====================
-[Doc 1]
-"刘慈欣生平"
-刘慈欣，1963年6月出生于北京，祖籍河南罗山。他是中国科幻小说的代表人物。虽然他在山西阳泉长大并工作，但他的出生地是北京。
-
-[Doc 2]
-"颐和园历史"
-颐和园，前身为清漪园，始建于清朝乾隆十五年（1750年）。它是以昆明湖、万寿山为基址，按照江南园林的设计手法建造的。
-==============================================================
-
---- Step 5 ---
-
-[Model Input Messages]
+--- Step 1 ---
+[MESSAGES]:
 [SYSTEM]:
-你是一个基于 Fact-Store 的推理 Agent。你的目标是通过构建知识图谱来回答问题。
-**严格遵守以下规则**：
-1. 你不能利用模型内部训练数据的记忆直接回答，必须通过 <search> 获取证据，然后 <assert> 存入 Fact-Store。
-2. **一次只执行一类动作**：
-   - 如果需要信息：输出 <search>查询query</search>。**输出后立即结束，等待 Observation**。
-   - 如果已有 Observation：输出 <assert>S, R, O</assert>。可以一次输出多条 assert。
-   - 如果 Fact-Store 足够：输出 <answer>答案</answer>。
-3. <assert> 的内容必须来源于当前的 Observation。
+You are a verifiable reasoning agent based on a **Fact-Store** architecture.
 
-=== 当前 Fact-Store (长期记忆) ===
-1. <刘慈欣, 出生地, 北京>
-2. <北京, 祖籍, 河南罗山>
+**INPUT STRUCTURE**:
+The user will provide a message containing the following sections:
+1. **Task**: The question you need to answer.
+2. **History**: A summary of your past actions and their results.
+3. **Executed Searches**: Queries you have already performed (to avoid duplication).
+4. **Observation**: The text documents retrieved by your LAST <search> action. **NOTE**: If your last action was NOT <search>, this section will be None/Empty.
+
+**CORE RULES**:
+1. **Reasoning First**: You must conduct reasoning inside <think>...</think> before generating any action.
+2. **No Hallucination**: You cannot answer from your internal training memory. You must <search>, read the Observation, and <assert> facts.
+3. **Fact-Dependency**: Your final <answer> must be strictly derived from the **Current Fact-Store**.
+4. **Format requirement**: You must enclose your action selection within <>.
+5. **Avoid Duplicate Searches**: Review the Executed Searches block. Do not repeat executed queries; craft new searches that are clearly distinct.
+
+**QUERY REFORMULATION STRATEGIES**:
+If your previous search failed (marked as 'NO INFO FOUND' in history), you MUST change your strategy:
+1. **Broaden**: Remove specific constraints (e.g., 'Director of movie X' -> 'Movie X cast').
+2. **Decompose**: Split complex questions into smaller entities.
+3. **Pivot**: Search for related entities mentioned in the question.
+4. **Do NOT** generate a query semantically identical to previous ones.
+
+**AVAILABLE ACTIONS**:
+- <search>keywords</search>: Acquire info.
+- <assert>Subject, Relation, Object</assert>: Extract facts from observation.
+- <retrieve>Subject, Relation, Object</retrieve>: Check sources.
+<answer>Final Answer</answer>: Use Fact-Store to answer. **Your answer MUST be a concise phrase or single word** to facilitate Exact Match (EM) evaluation.
+
+=== Current Fact-Store ===
+(Empty)
 
 
-----------------------------------------
+
 [USER]:
-任务目标：刘慈欣的出生地在哪里？该城市最著名的皇家园林是什么？它始建于哪个朝代？
+Task: The Oberoi family is part of a hotel company that has a head office in what city?
+
+Instruction: Fact-Store is empty. Please think and <search>.
+
 ----------------------------------------
-[USER]:
-已执行的操作历史：
-- Search: 刘慈欣 出生地
-- Asserted 2 facts
-- Asserted 0 facts
-- Search: 刘慈欣 出生地 北京 最著名的皇家园林 建始朝代
-----------------------------------------
-[USER]:
-=== 新的 Observation (短期记忆) ===
-[Doc 1]
-"刘慈欣生平"
-刘慈欣，1963年6月出生于北京，祖籍河南罗山。他是中国科幻小说的代表人物。虽然他在山西阳泉长大并工作，但他的出生地是北京。
+[RESPONSE]:
+<search>Oberoi family hotel company head office city</search>
 
-[Doc 2]
-"颐和园历史"
-颐和园，前身为清漪园，始建于清朝乾隆十五年（1750年）。它是以昆明湖、万寿山为基址，按照江南园林的设计手法建造的。
+============================================================
 
-指令：请阅读上述 Observation，使用 <assert>S, R, O</assert> 提取关键事实。
-----------------------------------------
-
-
-[LLM Output]: <assert>刘慈欣, 出生地, 北京</assert>
-<assert>北京, 最著名的皇家园林, 颐和园</assert>
-<assert>颐和园, 建始朝代, 清朝</assert>
-   [Action] Processing 3 Assertions...
-     -> Duplicate: ('刘慈欣', '出生地', '北京')
-     -> Stored: ('北京', '最著名的皇家园林', '颐和园') (Reward: +0.5)
-     -> Stored: ('颐和园', '建始朝代', '清朝') (Reward: +0.5)
-   [Step Reward] 1.50
---- Step 6 ---
-
-[Model Input Messages]
+--- Step 1 ---
+[MESSAGES]:
 [SYSTEM]:
-你是一个基于 Fact-Store 的推理 Agent。你的目标是通过构建知识图谱来回答问题。
-**严格遵守以下规则**：
-1. 你不能利用模型内部训练数据的记忆直接回答，必须通过 <search> 获取证据，然后 <assert> 存入 Fact-Store。
-2. **一次只执行一类动作**：
-   - 如果需要信息：输出 <search>查询query</search>。**输出后立即结束，等待 Observation**。
-   - 如果已有 Observation：输出 <assert>S, R, O</assert>。可以一次输出多条 assert。
-   - 如果 Fact-Store 足够：输出 <answer>答案</answer>。
-3. <assert> 的内容必须来源于当前的 Observation。
+You are a verifiable reasoning agent based on a **Fact-Store** architecture.
 
-=== 当前 Fact-Store (长期记忆) ===
-1. <刘慈欣, 出生地, 北京>
-2. <北京, 祖籍, 河南罗山>
-3. <北京, 最著名的皇家园林, 颐和园>
-4. <颐和园, 建始朝代, 清朝>
+**INPUT STRUCTURE**:
+The user will provide a message containing the following sections:
+1. **Task**: The question you need to answer.
+2. **History**: A summary of your past actions and their results.
+3. **Executed Searches**: Queries you have already performed (to avoid duplication).
+4. **Observation**: The text documents retrieved by your LAST <search> action. **NOTE**: If your last action was NOT <search>, this section will be None/Empty.
 
-----------------------------------------
+**CORE RULES**:
+1. **Reasoning First**: You must conduct reasoning inside <think>...</think> before generating any action.
+2. **No Hallucination**: You cannot answer from your internal training memory. You must <search>, read the Observation, and <assert> facts.
+3. **Fact-Dependency**: Your final <answer> must be strictly derived from the **Current Fact-Store**.
+4. **Format requirement**: You must enclose your action selection within <>.
+5. **Avoid Duplicate Searches**: Review the Executed Searches block. Do not repeat executed queries; craft new searches that are clearly distinct.
+
+**QUERY REFORMULATION STRATEGIES**:
+If your previous search failed (marked as 'NO INFO FOUND' in history), you MUST change your strategy:
+1. **Broaden**: Remove specific constraints (e.g., 'Director of movie X' -> 'Movie X cast').
+2. **Decompose**: Split complex questions into smaller entities.
+3. **Pivot**: Search for related entities mentioned in the question.
+4. **Do NOT** generate a query semantically identical to previous ones.
+
+**AVAILABLE ACTIONS**:
+- <search>keywords</search>: Acquire info.
+- <assert>Subject, Relation, Object</assert>: Extract facts from observation.
+- <retrieve>Subject, Relation, Object</retrieve>: Check sources.
+<answer>Final Answer</answer>: Use Fact-Store to answer. **Your answer MUST be a concise phrase or single word** to facilitate Exact Match (EM) evaluation.
+
+=== Current Fact-Store ===
+(Empty)
+
+
+
 [USER]:
-任务目标：刘慈欣的出生地在哪里？该城市最著名的皇家园林是什么？它始建于哪个朝代？
+Task: The Oberoi family is part of a hotel company that has a head office in what city?
+
+Instruction: Fact-Store is empty. Please think and <search>.
+
 ----------------------------------------
+[RESPONSE]:
+<search>Oberoi family hotel company headquarters city</search>
+
+============================================================
+
+--- Step 2 ---
+[MESSAGES]:
+[SYSTEM]:
+You are a verifiable reasoning agent based on a **Fact-Store** architecture.
+
+**INPUT STRUCTURE**:
+The user will provide a message containing the following sections:
+1. **Task**: The question you need to answer.
+2. **History**: A summary of your past actions and their results.
+3. **Executed Searches**: Queries you have already performed (to avoid duplication).
+4. **Observation**: The text documents retrieved by your LAST <search> action. **NOTE**: If your last action was NOT <search>, this section will be None/Empty.
+
+**CORE RULES**:
+1. **Reasoning First**: You must conduct reasoning inside <think>...</think> before generating any action.
+2. **No Hallucination**: You cannot answer from your internal training memory. You must <search>, read the Observation, and <assert> facts.
+3. **Fact-Dependency**: Your final <answer> must be strictly derived from the **Current Fact-Store**.
+4. **Format requirement**: You must enclose your action selection within <>.
+5. **Avoid Duplicate Searches**: Review the Executed Searches block. Do not repeat executed queries; craft new searches that are clearly distinct.
+
+**QUERY REFORMULATION STRATEGIES**:
+If your previous search failed (marked as 'NO INFO FOUND' in history), you MUST change your strategy:
+1. **Broaden**: Remove specific constraints (e.g., 'Director of movie X' -> 'Movie X cast').
+2. **Decompose**: Split complex questions into smaller entities.
+3. **Pivot**: Search for related entities mentioned in the question.
+4. **Do NOT** generate a query semantically identical to previous ones.
+
+**AVAILABLE ACTIONS**:
+- <search>keywords</search>: Acquire info.
+- <assert>Subject, Relation, Object</assert>: Extract facts from observation.
+- <retrieve>Subject, Relation, Object</retrieve>: Check sources.
+<answer>Final Answer</answer>: Use Fact-Store to answer. **Your answer MUST be a concise phrase or single word** to facilitate Exact Match (EM) evaluation.
+
+=== Current Fact-Store ===
+(Empty)
+
+
+
 [USER]:
-已执行的操作历史：
-- Search: 刘慈欣 出生地
-- Asserted 2 facts
-- Asserted 0 facts
-- Search: 刘慈欣 出生地 北京 最著名的皇家园林 建始朝代
-- Asserted 2 facts
+Task: The Oberoi family is part of a hotel company that has a head office in what city?
+
+History:
+- Search: Oberoi family hotel company headquarters city
+
+=== Executed Searches ===
+- Oberoi family hotel company headquarters city
+(Instruction: Do not repeat the above searches. Craft a new query if needed.)
+
+=== Observation ===
+[Doc 1] Title: Mohan Singh Oberoi (Length: 632 chars)
+Mohan Singh Oberoi Rai Bahadur Mohan Singh Oberoi (15 August 1898 – 3 May 2002) was an Indian hotelier, the founder and chairman of Oberoi Hotels & Resorts, India's second-largest hotel company, with 35 hotels in India, Egypt, Indonesia, UAE, Mauritius and Saudi Arabia. In his obituary the Times of India said that he was acknowledged for putting the Indian hoteliering on the global map by successfully establishing hotel brands like Oberoi and Trident worldwide. M. S.Oberoi was born in a Punjabi Sikh family in Bhaun, a minor village of Jhelum District (now Chakwal District), Punjab, British India. When he
+
+[Doc 2] Title: The Oberoi, Gurgaon (Length: 606 chars)
+The Oberoi, Gurgaon The Oberoi, Gurgaon is a luxury hotel in Gurgaon, the business hub on the outskirts of capital New Delhi. Owned by Gurgaon-based developers ""Orbit Resorts"" the owner is Parkash Singh Badal and managed by The Oberoi Hotels & Resorts chain, it was built at a cost of and opened on 13 April 2011 catering mainly to business travellers. The hotel is situated right next to the Trident Hotel property close to NH-8, also under a management contract with Orbit Resorts. In January 2012, it became the first Indian luxury hotel to be named, ""the World's Leading Luxury
+
+[Doc 3] Title: The Oberoi Group (Length: 598 chars)
+The Oberoi Group The Oberoi Group is a hotel group with its head office in Delhi. Founded in 1934, the company owns and/or operates 35 luxury hotels and two river cruise ships in six countries, primarily under its Oberoi Hotels & Resorts and Trident Hotels brands. The foundations of the Oberoi Group date back to 1934 when Rai Bahadur Mohan Singh Oberoi, the founder of the group, bought two properties: the Maidens in Delhi and the Clarke's in Shimla. In the following years Oberoi, assisted by his two sons, Tilak Raj Singh Oberoi and Prithvi Raj Singh Oberoi (P.R.S. Oberoi),
+
+
+Instruction: Analyze the observation inside <think>, then extract facts using <assert>.
+
 ----------------------------------------
+[RESPONSE]:
+<think>
+From the observation, Doc 3 clearly states that "The Oberoi Group is a hotel group with its head office in Delhi." This directly answers the question about the city where the head office of the Oberoi family's hotel company is located.
+</think>
+<assert>
+Oberoi Group, head office location, Delhi
+</assert>
+<answer>Delhi</answer>
+
+============================================================
+
+--- Step 1 ---
+[MESSAGES]:
+[SYSTEM]:
+You are a verifiable reasoning agent based on a **Fact-Store** architecture.
+
+**INPUT STRUCTURE**:
+The user will provide a message containing the following sections:
+1. **Task**: The question you need to answer.
+2. **History**: A summary of your past actions and their results.
+3. **Executed Searches**: Queries you have already performed (to avoid duplication).
+4. **Observation**: The text documents retrieved by your LAST <search> action. **NOTE**: If your last action was NOT <search>, this section will be None/Empty.
+
+**CORE RULES**:
+1. **Reasoning First**: You must conduct reasoning inside <think>...</think> before generating any action.
+2. **No Hallucination**: You cannot answer from your internal training memory. You must <search>, read the Observation, and <assert> facts.
+3. **Fact-Dependency**: Your final <answer> must be strictly derived from the **Current Fact-Store**.
+4. **Format requirement**: You must enclose your action selection within <>.
+5. **Avoid Duplicate Searches**: Review the Executed Searches block. Do not repeat executed queries; craft new searches that are clearly distinct.
+
+**QUERY REFORMULATION STRATEGIES**:
+If your previous search failed (marked as 'NO INFO FOUND' in history), you MUST change your strategy:
+1. **Broaden**: Remove specific constraints (e.g., 'Director of movie X' -> 'Movie X cast').
+2. **Decompose**: Split complex questions into smaller entities.
+3. **Pivot**: Search for related entities mentioned in the question.
+4. **Do NOT** generate a query semantically identical to previous ones.
+
+**AVAILABLE ACTIONS**:
+- <search>keywords</search>: Acquire info.
+- <assert>Subject, Relation, Object</assert>: Extract facts from observation.
+- <retrieve>Subject, Relation, Object</retrieve>: Check sources.
+<answer>Final Answer</answer>: Use Fact-Store to answer. **Your answer MUST be a concise phrase or single word** to facilitate Exact Match (EM) evaluation.
+
+=== Current Fact-Store ===
+(Empty)
+
+
+
 [USER]:
-指令：根据 Fact-Store 继续推理。如需更多信息请 <search>，如足够请 <answer>。
+Task: The Oberoi family is part of a hotel company that has a head office in what city?
+
+Instruction: Fact-Store is empty. Please think and <search>.
+
 ----------------------------------------
+[RESPONSE]:
+<search>Oberoi family hotel company headquarters city</search>
 
-[LLM Output]: <answer>刘慈欣的出生地在北京，北京最著名的皇家园林是颐和园，颐和园始建于清朝。</answer>
+============================================================
 
->>> [Final Answer]: 刘慈欣的出生地在北京，北京最著名的皇家园林是颐和园，颐和园始建于清朝。
+--- Step 2 ---
+[MESSAGES]:
+[SYSTEM]:
+You are a verifiable reasoning agent based on a **Fact-Store** architecture.
 
-Task Finished.
+**INPUT STRUCTURE**:
+The user will provide a message containing the following sections:
+1. **Task**: The question you need to answer.
+2. **History**: A summary of your past actions and their results.
+3. **Executed Searches**: Queries you have already performed (to avoid duplication).
+4. **Observation**: The text documents retrieved by your LAST <search> action. **NOTE**: If your last action was NOT <search>, this section will be None/Empty.
+
+**CORE RULES**:
+1. **Reasoning First**: You must conduct reasoning inside <think>...</think> before generating any action.
+2. **No Hallucination**: You cannot answer from your internal training memory. You must <search>, read the Observation, and <assert> facts.
+3. **Fact-Dependency**: Your final <answer> must be strictly derived from the **Current Fact-Store**.
+4. **Format requirement**: You must enclose your action selection within <>.
+5. **Avoid Duplicate Searches**: Review the Executed Searches block. Do not repeat executed queries; craft new searches that are clearly distinct.
+
+**QUERY REFORMULATION STRATEGIES**:
+If your previous search failed (marked as 'NO INFO FOUND' in history), you MUST change your strategy:
+1. **Broaden**: Remove specific constraints (e.g., 'Director of movie X' -> 'Movie X cast').
+2. **Decompose**: Split complex questions into smaller entities.
+3. **Pivot**: Search for related entities mentioned in the question.
+4. **Do NOT** generate a query semantically identical to previous ones.
+
+**AVAILABLE ACTIONS**:
+- <search>keywords</search>: Acquire info.
+- <assert>Subject, Relation, Object</assert>: Extract facts from observation.
+- <retrieve>Subject, Relation, Object</retrieve>: Check sources.
+<answer>Final Answer</answer>: Use Fact-Store to answer. **Your answer MUST be a concise phrase or single word** to facilitate Exact Match (EM) evaluation.
+
+=== Current Fact-Store ===
+(Empty)
+
+
+
+[USER]:
+Task: The Oberoi family is part of a hotel company that has a head office in what city?
+
+History:
+- Search: Oberoi family hotel company headquarters city
+
+=== Executed Searches ===
+- Oberoi family hotel company headquarters city
+(Instruction: Do not repeat the above searches. Craft a new query if needed.)
+
+=== Observation ===
+[Doc 1] Title: Mohan Singh Oberoi (Length: 632 chars)
+Mohan Singh Oberoi Rai Bahadur Mohan Singh Oberoi (15 August 1898 – 3 May 2002) was an Indian hotelier, the founder and chairman of Oberoi Hotels & Resorts, India's second-largest hotel company, with 35 hotels in India, Egypt, Indonesia, UAE, Mauritius and Saudi Arabia. In his obituary the Times of India said that he was acknowledged for putting the Indian hoteliering on the global map by successfully establishing hotel brands like Oberoi and Trident worldwide. M. S.Oberoi was born in a Punjabi Sikh family in Bhaun, a minor village of Jhelum District (now Chakwal District), Punjab, British India. When he
+
+[Doc 2] Title: The Oberoi, Gurgaon (Length: 606 chars)
+The Oberoi, Gurgaon The Oberoi, Gurgaon is a luxury hotel in Gurgaon, the business hub on the outskirts of capital New Delhi. Owned by Gurgaon-based developers ""Orbit Resorts"" the owner is Parkash Singh Badal and managed by The Oberoi Hotels & Resorts chain, it was built at a cost of and opened on 13 April 2011 catering mainly to business travellers. The hotel is situated right next to the Trident Hotel property close to NH-8, also under a management contract with Orbit Resorts. In January 2012, it became the first Indian luxury hotel to be named, ""the World's Leading Luxury
+
+[Doc 3] Title: The Oberoi Group (Length: 598 chars)
+The Oberoi Group The Oberoi Group is a hotel group with its head office in Delhi. Founded in 1934, the company owns and/or operates 35 luxury hotels and two river cruise ships in six countries, primarily under its Oberoi Hotels & Resorts and Trident Hotels brands. The foundations of the Oberoi Group date back to 1934 when Rai Bahadur Mohan Singh Oberoi, the founder of the group, bought two properties: the Maidens in Delhi and the Clarke's in Shimla. In the following years Oberoi, assisted by his two sons, Tilak Raj Singh Oberoi and Prithvi Raj Singh Oberoi (P.R.S. Oberoi),
+
+
+Instruction: Analyze the observation inside <think>, then extract facts using <assert>.
+
+----------------------------------------
+[RESPONSE]:
+<think>
+From the documents, we can infer that the Oberoi Group, which is owned by the Oberoi family and operates multiple hotels, has its head office in Delhi. This information is directly stated in Doc 3.
+</think>
+<assert>
+Oberoi Group, head office location, Delhi
+</assert>
+<answer>Delhi</answer>
+
+============================================================
+

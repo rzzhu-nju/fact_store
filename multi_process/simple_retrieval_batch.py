@@ -14,7 +14,7 @@ from tqdm import tqdm
 import datasets
 
 # --- 配置: 限制 CPU 使用核心数 ---
-CPU_LIMIT = 8
+CPU_LIMIT = 32
 
 # Set Faiss to use limited CPU cores for index searching
 try:

@@ -26,7 +26,7 @@ os.environ.setdefault("CUDA_VISIBLE_DEVICES", "1")
 
 # --- Mock imports for simple_retrieval ---
 try:
-    from simple_retrieval import SimpleDenseRetriever, Encoder
+    from simple_retrieval_batch import SimpleDenseRetriever, Encoder
 except ImportError:
     print("[Warning] 'simple_retrieval' module not found. Using mock classes.")
     class SimpleDenseRetriever:
@@ -42,8 +42,8 @@ except ImportError:
 def search(retriever, queries: List[str], top_k=3) -> List[str]:
     if not queries:
         return []
+
     results_batch, _ = retriever.search(queries, num=top_k)
-    
     batch_result_strs = []
     for results in results_batch:
         result_strs = []
@@ -61,6 +61,58 @@ def search(retriever, queries: List[str], top_k=3) -> List[str]:
             
     return batch_result_strs
 
+def batch_search(retriever, queries: List[str], top_k=3) -> List[str]:
+    if not queries:
+        return []
+
+    # ---- 1. 收集所有 sub-queries ----
+    grouped_sub_queries = []     # [[q1_sub1, q1_sub2], [q2_sub1], ...]
+    flat_sub_queries = []        # [q1_sub1, q1_sub2, q2_sub1, ...]
+
+    for query in queries:
+        sub_qs = [q.strip() for q in query.split(';') if q.strip()]
+        grouped_sub_queries.append(sub_qs)
+        flat_sub_queries.extend(sub_qs)
+
+    if not flat_sub_queries:
+        return [""] * len(queries)
+
+    # ---- 2. 统一执行一次检索 ----
+    all_results, _ = retriever.search(flat_sub_queries, num=top_k)
+    # all_results: List[List[doc]]，长度与 flat_sub_queries 一样
+
+    # ---- 3. 把扁平结果重新分组映射回每个 query ----
+    idx = 0
+    outputs = []
+
+    for sub_qs in grouped_sub_queries:
+        composite_parts = []
+
+        for sub_q in sub_qs:
+            results = all_results[idx]
+            idx += 1
+
+            sub_parts = [f"=== Sub-Query: {sub_q} ==="]
+
+            for i, doc in enumerate(results):
+                contents = doc.get('contents', '')
+                lines = contents.split('\n')
+
+                if lines:
+                    title = lines[0].strip('"')
+                    text = '\n'.join(lines[1:])
+                    length = len(contents)
+                    sub_parts.append(
+                        f"[Doc {i+1}] Title: {title} (Length: {length} chars)\n{text}"
+                    )
+                else:
+                    sub_parts.append(f"[Doc {i+1}] {contents}")
+
+            composite_parts.append("\n".join(sub_parts))
+
+        outputs.append("\n\n".join(composite_parts))
+
+    return outputs
 # ================= Model Engine =================
 
 class ModelEngineV1:
@@ -189,8 +241,31 @@ class BatchFactStoreAgent:
         
         memory_str = "\n".join([f"- {m}" for m in self.working_memory])
         if not memory_str: memory_str = "(Empty)"
+        batch_search_prompt = ("You are a verifiable reasoning agent based on a **Fact-Store** architecture.\n\n"
+            
+            "**INPUT STRUCTURE**:\n"
+            "1. **Task**: The question you need to answer.\n"
+            "2. **History**: A summary of your past actions.\n"
+            "3. **Working Memory**: Summarized key information from previous searches. Use this to guide your reasoning.\n"
+            "4. **Observation**: Raw documents from your LAST <search>.\n\n"
+            
+            "**CORE RULES**:\n"
+            "1. **Reasoning First**: Conduct reasoning inside <think>...</think>.\n"
+            "2. **Fact-Dependency**: Final <answer> must be derived from Fact-Store and Working Memory.\n"
+            "3. **Format**: Use <> for actions.\n\n"
+            "4. **Parallel Search**: <search> can query multiple keyword groups at once. Each group runs a separate search. Use ; to separate groups and avoid overlap for broader coverage."
+            
+
+            "**AVAILABLE ACTIONS**:\n"
+            "- <search> keywords group1 ; keywords group2; </search>: Acquire info.\n"
+            "- <assert>Subject, Relation, Object</assert>: Extract facts from Observation.\n"
+            "- <retrieve>Subject, Relation, Object</retrieve>: Check sources.\n"
+            "- <answer>Final Answer</answer>: Answer concisely.\n\n"
+            
+            f"=== Current Fact-Store ===\n{facts_str}\n\n"
+            f"=== Working Memory ===\n{memory_str}\n\n")
         
-        return (
+        origin_prompt = (
             "You are a verifiable reasoning agent based on a **Fact-Store** architecture.\n\n"
             
             "**INPUT STRUCTURE**:\n"
@@ -213,6 +288,7 @@ class BatchFactStoreAgent:
             f"=== Current Fact-Store ===\n{facts_str}\n\n"
             f"=== Working Memory ===\n{memory_str}\n\n"
         )
+        return batch_search_prompt
 
     def build_context(self) -> List[Dict]:
         messages = [{"role": "system", "content": self.get_system_prompt()}]
@@ -363,7 +439,7 @@ if __name__ == "__main__":
     dataset = load_bamboogle_dataset()
     engine = ModelEngineV1()
     
-    BATCH_SIZE = 8
+    BATCH_SIZE = 32
     all_results = []
     total_len = len(dataset)
     
@@ -421,8 +497,9 @@ if __name__ == "__main__":
                 
                 if queries:
                     # print(f"   [Batch Search] Searching for {len(queries)} agents...")
-                    search_results = search(engine.retriever, queries)
+                    # search_results = search(engine.retriever, queries)
                     
+                    search_results = batch_search(engine.retriever, queries)
                     # --- SUMMARIZATION PHASE ---
                     # Prepare prompts for summarization
                     summ_prompts = []
@@ -484,7 +561,7 @@ if __name__ == "__main__":
             # Update Progress Bar by the number of agents processed in this batch
             pbar.update(len(batch_data))
 
-            with open("batch_results.json", "w") as f:
+            with open("batch_search_results.json", "w") as f:
                 json.dump(all_results, f, indent=2)
 
     total_em = sum(r["em"] for r in all_results)

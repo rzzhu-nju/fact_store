@@ -48,6 +48,7 @@ actor_rollout_ref:
 
   # Rollout model config.
   rollout:
+    name: fact_store
 
     # for huge model, layered summon can save memory (prevent OOM) but make it slower
     layered_summon: False
@@ -57,7 +58,7 @@ custom_reward_function:
 
   # The path to the file containing your customized reward function.
   # If not specified, pre-implemented reward functions will be used.
-  path: null
+  path: /home/rzzhu/my_fact_store_project/environment/reward_utils.py
 
   # The name of the reward function within the specified file. Default is 'compute_score'.
   name: compute_score
@@ -75,7 +76,7 @@ algorithm:
   lam: 1.0
 
   # Advantage estimator type: "gae", "grpo", "reinforce_plus_plus", etc.
-  adv_estimator: gae
+  adv_estimator: grpo
 
   # Whether to normalize advantages by std (specific to GRPO)
   norm_adv_by_std_in_grpo: True

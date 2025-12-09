@@ -51,19 +51,22 @@ def calculate_reward(
                 best_idx = sims.index(max_sim)
                 matched_gold = gold_facts[best_idx]
                 
-            # === Reward Logic ===
-            HIGH_THRESHOLD = 0.85
-            MEDIUM_THRESHOLD = 0.75
-            LOW_THRESHOLD = 0.60
+            # === Reward Logic (Relaxed V3.3) ===
+            # Based on user feedback: 0.9, 0.75, 0.6 thresholds
+            # Additive/Subtractive logic
+            
+            HIGH_THRESHOLD = 0.95
+            MEDIUM_THRESHOLD = 0.9
+            LOW_THRESHOLD = 0.8
             
             if max_sim >= HIGH_THRESHOLD:
                 reward = 0.2  # Strong match
             elif max_sim >= MEDIUM_THRESHOLD:
                 reward = 0.1  # Good match
             elif max_sim < LOW_THRESHOLD:
-                reward = -0.05 # Penalty
+                reward = -0.1 # Mild Penalty for noise
             else:
-                reward = 0.0   # Neutral
+                reward = 0.0   # Neutral zone (0.6 - 0.75)
                 
         except Exception as e:
             print(f"Error in reward calculation: {e}")
@@ -83,6 +86,19 @@ def calculate_reward(
         "desc": f"Extracted: {triple_str} | Max Sim: {max_sim:.3f}"
     }
 
+def precomputed_reward_fn(data_proto: Any) -> torch.Tensor:
+    """
+    Reward function that expects rewards to be already computed in the batch.
+    Used when the Rollout Worker calculates rewards (e.g. process rewards).
+    """
+    if 'precomputed_rewards' in data_proto.batch:
+        return data_proto.batch['precomputed_rewards']
+    
+    # Fallback: Return zeros if not found
+    batch_size = data_proto.batch['input_ids'].shape[0]
+    seq_len = data_proto.batch['input_ids'].shape[1]
+    return torch.zeros((batch_size, seq_len), device=data_proto.batch['input_ids'].device)
+
 def calculate_final_answer_reward(
     student_answer: str,
     gold_answer: str,
@@ -101,19 +117,15 @@ def calculate_final_answer_reward(
     if gold_answer.lower() in student_answer.lower():
         return 1.0
         
-    # 2. Embedding Similarity
-    if embedding_model:
-        try:
-            ans_emb = embedding_model.encode([student_answer], is_query=False)[0]
-            gold_emb = embedding_model.encode([gold_answer], is_query=False)[0]
-            sim = compute_cosine_similarity(ans_emb, gold_emb)
-            
-            if sim > 0.9: return 1.0
-            if sim > 0.8: return 0.5
-        except:
-            pass
             
     return 0.0
+
+def calculate_retrieve_penalty() -> Dict[str, Any]:
+    return {
+        "reward": -0.5,
+        "type": "retrieve_penalty",
+        "desc": "Retrieve tool used"
+    }
 
 def compute_score(solution_str, ground_truth, **kwargs):
     """

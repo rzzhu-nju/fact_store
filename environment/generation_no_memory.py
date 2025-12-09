@@ -26,15 +26,15 @@ from omegaconf import OmegaConf
 
 # Import external reward functions
 try:
-    from reward_utils import calculate_reward, calculate_final_answer_reward
+    from reward_utils import calculate_reward, calculate_final_answer_reward, calculate_retrieve_penalty
 except ImportError:
     # Fallback if running from a different directory context
     import sys
     sys.path.append(os.path.dirname(__file__))
-    from reward_utils import calculate_reward, calculate_final_answer_reward
+    from reward_utils import calculate_reward, calculate_final_answer_reward, calculate_retrieve_penalty
 
 # ================= Configuration =================
-os.environ.setdefault("CUDA_VISIBLE_DEVICES", "1")
+os.environ.setdefault("CUDA_VISIBLE_DEVICES", "0")
 
 # --- Mock imports for simple_retrieval ---
 try:
@@ -72,6 +72,27 @@ def search(retriever, queries: List[str], top_k=3) -> List[str]:
         batch_result_strs.append("\n\n".join(result_strs))
             
     return batch_result_strs
+
+class RealHTTPRetriever:
+    def __init__(self, url: str, timeout: int = 30):
+        import requests
+        self.url = url
+        self.timeout = timeout
+        self._session = requests.Session()
+        self._session.trust_env = False
+    def search(self, queries, num=3):
+        try:
+            payload = {"queries": queries, "topk": num}
+            resp = self._session.post(self.url, json=payload, timeout=self.timeout)
+            resp.raise_for_status()
+            data = resp.json()
+            batch_results = []
+            for res_str in data.get('result', []):
+                batch_results.append([{'contents': res_str}])
+            return batch_results, data.get('raw_scores', None)
+        except Exception as e:
+            print(f"Search failed: {e}")
+            return [[{'contents': ''}] for _ in queries], None
 
 # ================= Model Engine =================
 
@@ -194,24 +215,19 @@ class BatchFactStoreAgent:
         # === Config Update: Increased Max Steps ===
         self.MAX_STEPS = 12 
 
-    def reconstruct_training_sample(self, tokenizer) -> Tuple[List[int], List[int]]:
+    def reconstruct_training_sample(self, tokenizer) -> Tuple[List[int], List[int], List[float], List[float]]:
         """
-        Reconstructs the full training sequence with masking.
-        Mask = 1 for model generation (gradients), 0 for prompt/observation (no gradients).
+        Reconstructs the full training sequence with masking, dense rewards, and log probabilities.
+        Returns: input_ids, loss_mask, reward_tensor, log_probs_tensor
         """
-        # Start with the initial prompt (Mask = 0)
-        # We need to rebuild the initial prompt manually to avoid the 'History' part which accumulates
+        # Start with the initial prompt
         initial_prompt = self.get_system_prompt() + f"\n\nTask: {self.question}\n\nInstruction: Fact-Store is empty. Please think and <search>."
         
         full_input_ids = tokenizer.encode(initial_prompt, add_special_tokens=True)
         full_loss_mask = [0] * len(full_input_ids)
-        
-        # Iterate through logs to find model actions and observations
-        # Logs structure:
-        # - role=user (Prompt, ignore for reconstruction as we build incrementally)
-        # - role=assistant (Model Response, Mask=1)
-        # - type=search_result (Observation, Mask=0)
-        # - type=reward (Internal log, ignore)
+        full_rewards = [0.0] * len(full_input_ids)
+        # Log probs for prompt are 0 (masked anyway)
+        full_log_probs = [0.0] * len(full_input_ids)
         
         for log in self.logs:
             if log.get('role') == 'assistant':
@@ -221,45 +237,69 @@ class BatchFactStoreAgent:
                 full_input_ids.extend(tokens)
                 full_loss_mask.extend([1] * len(tokens))
                 
+                step_rewards = [0.0] * len(tokens)
+                full_rewards.extend(step_rewards)
+                
+                # Append Log Probs
+                # If 'log_probs' is available in log, use it. Otherwise 0.0 (and hope for recompute or ignore)
+                # log['log_probs'] should be a list of floats matching 'tokens' length
+                if 'log_probs' in log and len(log['log_probs']) == len(tokens):
+                    full_log_probs.extend(log['log_probs'])
+                else:
+                    # Fallback: fill with 0.0. 
+                    # Note: If this happens in PPO, it might be problematic unless recomputed.
+                    full_log_probs.extend([0.0] * len(tokens))
+                
             elif log.get('type') == 'search_result':
                 # Observation
                 content = f"\n\n=== Observation ===\n{log['result_snippet']}\n"
                 tokens = tokenizer.encode(content, add_special_tokens=False)
                 full_input_ids.extend(tokens)
                 full_loss_mask.extend([0] * len(tokens))
+                full_rewards.extend([0.0] * len(tokens))
+                full_log_probs.extend([0.0] * len(tokens))
                 
-            # Note: We skip 'role=user' logs because they contain the FULL context up to that point.
-            # We are reconstructing the sequence incrementally.
+            elif log.get('type') == 'reward':
+                # Reward entry - attribute to last token
+                reward_val = log['content']['reward']
+                if full_rewards:
+                    full_rewards[-1] += reward_val
             
-        return full_input_ids, full_loss_mask
+        return full_input_ids, full_loss_mask, full_rewards, full_log_probs
+
 
     def get_system_prompt(self) -> str:
         facts_str = "\n".join([f"{i+1}. <{f}>" for i, f in enumerate(self.visible_facts)])
         if not facts_str: facts_str = "(Empty)"
-        
-        # === REMOVED: Memory String ===
-        
+
         return (
             "You are a verifiable reasoning agent based on a **Fact-Store** architecture.\n\n"
-            
             "**INPUT STRUCTURE**:\n"
+            "The user will provide a message containing the following sections:\n"
             "1. **Task**: The question you need to answer.\n"
-            "2. **History**: A summary of your past actions.\n"
-            # "3. **Working Memory**: ... (Removed)\n" 
-            "3. **Observation**: Raw documents from your LAST <search>.\n\n"
-            
+            "2. **History**: A summary of your past actions and their results.\n"
+            "3. **Executed Searches**: Queries you have already performed (to avoid duplication).\n"
+            "4. **Observation**: The text documents retrieved by your LAST <search> action. **NOTE**: If your last action was NOT <search>, this section will be None/Empty.\n"
+            "5. **Current Fact-Store**: The list of all facts you have asserted so far.\n\n"
             "**CORE RULES**:\n"
-            "1. **Reasoning First**: Conduct reasoning inside <think>...</think>.\n"
-            "2. **Fact-Dependency**: Final <answer> must be derived from Fact-Store and Observations.\n"
-            "3. **Format**: Use <> for actions.\n\n"
-
+            "1. **Reasoning First**: You must conduct reasoning inside <think>...</think> before generating any action.\n"
+            "2. **No Hallucination**: You cannot answer from your internal training memory. You must <search>, read the Observation, and <assert> facts.\n"
+            "3. **Fact-Dependency**: Your final <answer> must be strictly derived from the **Current Fact-Store**.\n"
+            "4. **Format requirement**: You must enclose your action selection within <>.\n"
+            "5. **Avoid Duplicate Searches**: Review the Executed Searches block. Do not repeat executed queries; craft new searches that are clearly distinct.\n\n"
+            "**QUERY REFORMULATION STRATEGIES**:\n"
+            "If your previous search failed (marked as 'NO INFO FOUND' in history), you MUST change your strategy:\n"
+            "1. **Broaden**: Remove specific constraints (e.g., 'Director of movie X' -> 'Movie X cast').\n"
+            "2. **Decompose**: Split complex questions into smaller entities.\n"
+            "3. **Pivot**: Search for related entities mentioned in the question.\n"
+            "4. **Do NOT** generate a query semantically identical to previous ones.\n\n"
             "**AVAILABLE ACTIONS**:\n"
             "- <search>keywords</search>: Acquire info.\n"
-            "- <assert>Subject, Relation, Object</assert>: Extract facts from Observation.\n"
+            "- <assert>Subject, Relation, Object</assert>: Extract facts from observation (e.g. <assert>Obama, born in, Hawaii</assert>). DO NOT include labels like 'Subject:'. Just use commas. You can assert multiple facts in one turn.\n"
             "- <retrieve>Subject, Relation, Object</retrieve>: Check sources.\n"
-            "- <answer>Final Answer</answer>: Answer concisely.\n\n"
-            
-            f"=== Current Fact-Store ===\n{facts_str}\n\n"
+            "- <answer>Final Answer</answer>: Use Fact-Store to answer. **Make the answer extremely concise (e.g., a single word, entity name, or short phrase). Do NOT use full sentences.**\n\n"
+            "=== Current Fact-Store ===\n"
+            f"{facts_str}\n"
         )
 
     def build_context(self) -> List[Dict]:
@@ -275,6 +315,10 @@ class BatchFactStoreAgent:
             hist = "\n".join([f"- {q}" for q in self.search_history])
             user_content_parts.append(f"=== Executed Searches ===\n{hist}")
         
+        # Add Current Fact-Store explicitly in user message as well to be safe, or rely on system prompt update
+        # Since get_system_prompt() is called every time build_context is called (it's dynamic), 
+        # the system prompt already contains the latest facts.
+        
         if self.current_observation_str:
             obs_block = f"=== Observation ===\n{self.current_observation_str}\n"
             user_content_parts.append(obs_block)
@@ -282,6 +326,9 @@ class BatchFactStoreAgent:
         else:
             msg = "Instruction: Fact-Store is empty. Please think and <search>." if not self.visible_facts else "Instruction: Please think and verify if you can <answer> or need to <search> more."
             user_content_parts.append(msg)
+            
+        # Append "Let's think" or similar if we want to force CoT?
+        # But we want to let the model do it.
             
         full_user_content = "\n\n".join(user_content_parts)
         messages.append({"role": "user", "content": full_user_content})
@@ -299,11 +346,15 @@ class BatchFactStoreAgent:
             self.action_data = context
             self.steps_taken += 1
             # Log the prompt (User message)
+            # Only append if not already last message (to avoid dupes if re-running)
+            # Actually, `build_context` creates new messages.
+            # In RL, we usually append.
             self.logs.append({"step": self.steps_taken, "role": "user", "content": context[-1]['content']})
             return
             
         elif self.next_action == "parse":
             # Log the response
+            if response is None: response = "" # Safety check
             self.logs.append({"step": self.steps_taken, "role": "assistant", "content": response})
             self.parse_and_execute(response)
 
@@ -354,6 +405,8 @@ class BatchFactStoreAgent:
             new_facts_count = 0
             context_for_reward = self.current_observation_str if self.current_observation_str else ""
 
+
+            
             for content in assert_matches:
                 parts = [p.strip() for p in content.split(',', 2)]
                 if len(parts) == 3:
@@ -389,7 +442,35 @@ class BatchFactStoreAgent:
             return
 
         elif last_action == 'retrieve':
-            self.history_summary.append("- Retrieve action executed.")
+            retrieve_matches = re.findall(r"<retrieve>(.*?)</retrieve>", response, re.DOTALL)
+            if not retrieve_matches: 
+                 self.history_summary.append("- Retrieve action failed to parse.")
+                 self.next_action = "generate"
+                 return
+            
+            fact_triple_str = retrieve_matches[-1].strip()
+            # Clean up the triple string to match how it's stored in evidence_db
+            # evidence_db stores keys as "Subject, Relation, Object"
+            # We assume the model outputs exactly that, or we might need to normalize spaces.
+            
+            # Simple normalization: split by comma and rejoin
+            parts = [p.strip() for p in fact_triple_str.split(',', 2)]
+            if len(parts) == 3:
+                normalized_key = f"{parts[0]}, {parts[1]}, {parts[2]}"
+                source_doc = self.evidence_db.get(normalized_key, "No source document found for this fact in Evidence DB.")
+                
+                self.current_observation_str = f"Source Document for <{normalized_key}>:\n{source_doc}"
+                self.history_summary.append(f"- Retrieved source for: {normalized_key}")
+                penalty_info = calculate_retrieve_penalty()
+                self.logs.append({
+                    "step": self.steps_taken,
+                    "type": "reward",
+                    "content": penalty_info
+                })
+            else:
+                 self.history_summary.append(f"- Retrieve failed: Invalid format '{fact_triple_str}'")
+                 self.current_observation_str = None
+
             self.next_action = "generate"
             return
 
@@ -436,7 +517,7 @@ if __name__ == "__main__":
     parser.add_argument("--data_dir", default="data/nq_hotpotqa_train_autorefine")
     parser.add_argument("--base_model", default="Qwen/Qwen2.5-3B")
     parser.add_argument("--experiment_name", default="mygen-autorefine-qwen2.5-3b")
-    parser.add_argument("--retriever_url", default="http://127.0.0.1:8000/retrieve")
+    parser.add_argument("--retriever_url", default="http://127.0.0.1:8085/search")
     parser.add_argument("--topk", type=int, default=3)
     parser.add_argument("--n_gpus", type=int, default=8)
     parser.add_argument("--nnodes", type=int, default=1)
@@ -450,6 +531,12 @@ if __name__ == "__main__":
     else:
         dataset = load_bamboogle_dataset()
         engine = ModelEngineV1()
+        if args.retriever_url:
+            try:
+                engine.retriever = RealHTTPRetriever(args.retriever_url)
+                print(f"Using HTTP Retriever at {args.retriever_url}")
+            except Exception as e:
+                print(f"Failed to initialize HTTP Retriever: {e}. Falling back to local retriever.")
         BATCH_SIZE = 8
         all_results = []
         total_len = len(dataset)
@@ -465,7 +552,7 @@ if __name__ == "__main__":
                     q = item["question"]
                     a = item.get("golden_answers", item.get("answer", []))
                     gf = item.get("gold_facts", [])
-                    current_agents.append(BatchFactStoreAgent(engine, search, q, a, gold_facts=gf))
+                    current_agents.append(BatchFactStoreAgent(engine, search, engine.reward_encoder, q, a, gold_facts=gf))
                 active_agents = current_agents
                 while any(not agent.is_finished for agent in active_agents):
                     generate_batch_indices = []
@@ -504,16 +591,12 @@ if __name__ == "__main__":
                     if all(agent.is_finished for agent in active_agents):
                         break
                 for agent in current_agents:
-                    # Calculate final reward
                     final_reward = calculate_final_answer_reward(
                         agent.final_answer or "",
                         agent.answer[0] if isinstance(agent.answer, list) else agent.answer,
                         embedding_model=engine.reward_encoder
                     )
-                    
-                    # Reconstruct training sample with mask
-                    input_ids, loss_mask = agent.reconstruct_training_sample(engine.tokenizer_llm)
-                    
+                    input_ids, loss_mask, _, _ = agent.reconstruct_training_sample(engine.tokenizer_llm)
                     result_entry = {
                         "question": agent.question,
                         "final_answer": agent.final_answer,

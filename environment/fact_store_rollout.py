@@ -13,23 +13,39 @@ class FactStoreRollout(vLLMRollout):
         # Initialize Retriever (Real or Mock)
         # In a real setup, ensure 'retriever_server.py' is running and accessible
         try:
-            from environment.generation_no_memory import SimpleDenseRetriever, Encoder
-            # We assume the retriever server is used via HTTP or local if possible
-            # If SimpleDenseRetriever connects to a server, that's great.
-            # If it loads local index, make sure we have memory.
-            # For Online RL, usually we use a light HTTP client.
-            # Let's assume we use the same class as in generation script.
-            self.retriever = SimpleDenseRetriever(
-                 model_name="e5", 
-                 model_path="/data1/shares/e5-base-v2", 
-                 pooling_method="mean",
-                 max_length=512,
-                 use_fp16=True,
-                 index_path="/data1/rzzhu/wiki-2018/e5_Flat.index",
-                 corpus_path="/data1/rzzhu/wiki-2018/wiki-18.jsonl",
-                 topk=3,
-                 faiss_gpu=False
-            )
+            # Try to connect to HTTP Retriever Server
+            import requests
+            class HTTPRetriever:
+                def __init__(self, url="http://127.0.0.1:8085/search"):
+                    self.url = url
+                    
+                def search(self, queries, num=3):
+                    try:
+                        payload = {"queries": queries, "topk": num}
+                        resp = requests.post(self.url, json=payload, timeout=30)
+                        resp.raise_for_status()
+                        data = resp.json()
+                        
+                        batch_results = []
+                        for res_str in data['result']:
+                             # Treat the whole string as one "doc" content for simplicity, 
+                             # or try to split if we really need structure.
+                             # The agent uses: 
+                             # for results in results_batch:
+                             #    for doc in results: ...
+                             
+                             batch_results.append([{'contents': res_str}])
+                             
+                        return batch_results, data.get('raw_scores', None)
+                        
+                    except Exception as e:
+                        print(f"Retriever Server Error: {e}")
+                        return [[{'contents': f"Error retrieving: {q}"}] for q in queries], None
+
+            self.retriever = HTTPRetriever()
+            print(">>> Connected to HTTP Retriever Server at http://127.0.0.1:8085")
+            
+            from environment.generation_no_memory import Encoder
             self.reward_encoder = Encoder(
                  model_name="e5",
                  model_path="/data1/shares/e5-base-v2",
@@ -38,7 +54,7 @@ class FactStoreRollout(vLLMRollout):
                  use_fp16=True
             )
         except Exception as e:
-            print(f"Warning: Could not load Retriever/Encoder in Rollout ({e}). Using Mocks.")
+            print(f"Warning: Could not init HTTP Retriever or Encoder ({e}). Using Mocks.")
             class MockRetriever:
                 def search(self, queries, num=3):
                     return [[{'contents': f'Content for {q}'} for _ in range(num)] for q in queries], None
@@ -141,10 +157,13 @@ class FactStoreRollout(vLLMRollout):
                     else:
                         responses.append(str(output))
                 
-                # Update Agents
-                for idx, resp in zip(gen_indices, responses):
+                    
                     active_agents[idx].next_action = "parse"
                     active_agents[idx].step(resp)
+                    
+                    # DEBUG: Check if retrieve happened
+                    if "Retrieved source for" in active_agents[idx].history_summary[-1]:
+                         print(f"[Rollout] Agent {idx} performed RETRIEVE.")
             
             # C. Handle Search (Environment Step)
             search_indices = []
@@ -184,25 +203,30 @@ class FactStoreRollout(vLLMRollout):
         output_input_ids = []
         output_masks = []
         output_rewards = []
-        
+        # output_log_probs = [] # Not mandatory if actor recomputes, but good to have if we collected them
+
         max_len = 0
         
         for agent in agents:
-            # Get full trace with mask
-            ids, mask = agent.reconstruct_training_sample(tokenizer)
+            # Get full trace with mask and dense rewards
+            # reconstruct_training_sample returns (input_ids, loss_mask, full_rewards, full_log_probs)
+            ids, mask, dense_rewards, _ = agent.reconstruct_training_sample(tokenizer)
             
-            # Calculate final reward
-            # Note: We use the outcome reward (EM) for the whole trajectory
-            # GRPO will attribute this to all actions in the trajectory
+            # Calculate final reward (Outcome Reward)
             final_reward = calculate_final_answer_reward(
                 agent.final_answer or "",
                 agent.answer[0] if isinstance(agent.answer, list) else agent.answer,
                 embedding_model=self.reward_encoder
             )
             
+            # Add Final Reward to the last token's reward
+            # This makes it a sparse reward at the end of the trajectory
+            if dense_rewards:
+                dense_rewards[-1] += final_reward
+            
             output_input_ids.append(torch.tensor(ids))
             output_masks.append(torch.tensor(mask))
-            output_rewards.append(torch.tensor(final_reward))
+            output_rewards.append(torch.tensor(dense_rewards))
             
             if len(ids) > max_len:
                 max_len = len(ids)
@@ -215,24 +239,25 @@ class FactStoreRollout(vLLMRollout):
         padded_input_ids = torch.full((len(agents), max_len), pad_token_id, dtype=torch.long)
         padded_masks = torch.full((len(agents), max_len), 0, dtype=torch.long) # Mask 0 for padding
         padded_attention_mask = torch.full((len(agents), max_len), 0, dtype=torch.long)
-        
-        for i, (ids, mask) in enumerate(zip(output_input_ids, output_masks)):
+        padded_rewards = torch.full((len(agents), max_len), 0.0, dtype=torch.float32)
+
+        for i, (ids, mask, rewards) in enumerate(zip(output_input_ids, output_masks, output_rewards)):
             l = len(ids)
             padded_input_ids[i, :l] = ids
             padded_masks[i, :l] = mask
             padded_attention_mask[i, :l] = 1 # 1 for valid tokens
+            padded_rewards[i, :l] = rewards
             
         # Construct DataProto
-        # Verl expects: input_ids, attention_mask, position_ids, labels (optional)
-        # For PPO, we need 'old_log_probs' usually computed by Actor, but Rollout just provides data.
-        # We attach 'reward_tensor' to meta_info or batch?
-        # GRPO expects rewards in the batch usually.
+        # We pass 'precomputed_rewards' in batch so that reward_utils.precomputed_reward_fn can pick it up.
+        # This allows us to combine Process Rewards (dense) + Outcome Reward (sparse at end).
+        # GRPO will use GAE with gamma=0.95 (configured in trainer config) to propagate these rewards.
         
         batch_dict = {
             'input_ids': padded_input_ids,
             'attention_mask': padded_attention_mask,
             'loss_mask': padded_masks, # Verl uses loss_mask
-            'reward': torch.stack(output_rewards)
+            'precomputed_rewards': padded_rewards # Dense rewards: Process + Final
         }
         
         # We must return DataProto

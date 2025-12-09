@@ -247,4 +247,4 @@ if __name__ == "__main__":
     args = parser.parse_args()
     
     print(f"Starting server on {args.host}:{args.port}")
-    uvicorn.run(app, host=args.host, port=args.port)
+    uvicorn.run(app, host=args.host, port=args.port, log_level="info")
